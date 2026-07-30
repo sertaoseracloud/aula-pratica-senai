@@ -1,23 +1,34 @@
-# Tutorial Analítico: Simulando AWS RDS e o Teorema PACELC com PostgreSQL Puro
+# Laboratório 1 — RDS / PostgreSQL: réplica síncrona vs. assíncrona
 
-Este laboratório constrói uma topologia RDS a partir da imagem oficial do PostgreSQL, sem abstrações de orquestração gerenciada. Um nó primário sustenta **duas** réplicas com contratos deliberadamente opostos:
+**Duração: ~3 minutos** (13 s subindo o cluster + 179 s de testes).
 
-- `rds-standby-sync` — replicação **síncrona**, emulando uma implantação **Multi-AZ**;
-- `rds-read-replica` — replicação **assíncrona**, emulando uma **Read Replica**.
+## O que você vai fazer
 
-A virtude do arranjo é que os dois quadrantes do PACELC coexistem no mesmo cluster, sob o mesmo tráfego. A diferença de comportamento não vem do produto nem da carga: vem exclusivamente do contrato de replicação de cada nó.
+Subir um PostgreSQL primário com **duas réplicas configuradas de formas opostas**:
 
-> Todos os números abaixo foram obtidos executando este laboratório de ponta a ponta.
+- `rds-standby-sync` — replicação **síncrona**. É o que a AWS chama de **Multi-AZ**. O primário só confirma um commit depois que essa réplica avisar que recebeu.
+- `rds-read-replica` — replicação **assíncrona**. É o que a AWS chama de **Read Replica**. O primário confirma na hora e manda o dado depois.
 
-**Tempo total estimado: ~3 minutos** (bootstrap 13 s + testes 179 s).
+Depois você vai atrasar a rede de cada uma e desconectar cada uma, medindo o efeito.
+
+A graça do arranjo é que os dois comportamentos convivem no mesmo cluster, sob a mesma carga. Quando os resultados derem diferente, não vai ter dúvida sobre a causa: a única coisa que muda entre as duas réplicas é o contrato de replicação.
+
+## O que você vai descobrir
+
+- Atrasar a réplica **síncrona** em 2 segundos faz cada commit custar **2042 ms** em vez de 1 ms.
+- Atrasar a réplica **assíncrona** com o mesmo atraso **não muda nada** (5 ms).
+- Desconectar a réplica **síncrona** faz o `INSERT` **travar sem responder**.
+- Desconectar a réplica **assíncrona** não afeta nada.
+
+Todos esses números foram medidos, não estimados.
 
 ---
 
-## Fase 1: Script de Inicialização do Primário
+## Passo 1 — Criar o script de inicialização
 
-A imagem oficial do PostgreSQL nasce isolada. Para que o motor assuma o papel de primário é necessário intervir em seu primeiro ciclo de vida.
+O PostgreSQL oficial sobe como banco isolado. Para virar primário de replicação, precisa de configuração no primeiro boot.
 
-> Arquivos `.sh` são ignorados pelo Git (ver [.gitignore](../../.gitignore)). Copie o conteúdo abaixo para `01-init.sh` neste diretório.
+> Este arquivo **não vem no clone** (está no `.gitignore`). Crie `01-init.sh` nesta pasta com o conteúdo abaixo.
 
 ```bash
 #!/bin/bash
@@ -40,15 +51,23 @@ synchronous_standby_names = 'standby_sync'
 EOF
 ```
 
-A linha decisiva é `synchronous_standby_names = 'standby_sync'`. Ela nomeia **um** `application_name` como síncrono. Toda réplica que se conecte com outro nome permanece assíncrona — é assim que o mesmo cluster hospeda os dois regimes.
+**A linha que faz o laboratório funcionar é esta:**
+
+```
+synchronous_standby_names = 'standby_sync'
+```
+
+Ela diz: "a réplica que se conectar usando o nome `standby_sync` é síncrona". Qualquer outra réplica que conectar com nome diferente continua assíncrona. É só isso que separa os dois comportamentos — e é por isso que dá para ter os dois no mesmo cluster.
+
+Dê permissão de execução:
 
 ```bash
 chmod +x 01-init.sh
 ```
 
-## Fase 2: Orquestração
+## Passo 2 — Criar o docker-compose.yml
 
-> O `docker-compose.yml` é ignorado pelo Git. Copie o conteúdo abaixo para `docker-compose.yml` neste diretório.
+> Também **não vem no clone**. Crie `docker-compose.yml` nesta pasta com o conteúdo abaixo.
 
 ```yaml
 services:
@@ -132,13 +151,15 @@ networks:
     driver: bridge
 ```
 
-### Inicialização e portão de prontidão
+Repare no `application_name` dentro do `primary_conninfo` de cada réplica: uma conecta como `standby_sync` (e vira síncrona, porque bate com o nome no `01-init.sh`), a outra como `read_replica` (e fica assíncrona).
+
+## Passo 3 — Subir o cluster
 
 ```bash
 docker compose up -d --wait
 ```
 
-`--wait` confirma que os processos respondem, mas **não** que a replicação foi estabelecida. Use o portão abaixo — ele filtra por `state='streaming'`, e essa filtragem é essencial:
+**Não comece a medir ainda.** O `--wait` confirma que os processos responderam, mas a replicação pode não ter sido estabelecida. Rode o comando de espera abaixo:
 
 ```bash
 for i in $(seq 1 60); do
@@ -147,14 +168,18 @@ for i in $(seq 1 60); do
   [ "$n" = "2" ] && { echo "2 replicas em streaming"; break; }
   sleep 5
 done
+```
 
+> **Por que `WHERE state='streaming'` importa.** Enquanto as réplicas copiam os dados iniciais (`pg_basebackup`), essas sessões de cópia também aparecem em `pg_stat_replication`, com `state='backup'`. Se você contar sem filtrar, vai encontrar 2 e achar que está pronto — quando na verdade ainda não existe replicação nenhuma. Esse erro aconteceu na validação.
+
+Confirme a topologia:
+
+```bash
 docker exec rds-primary psql -U admin -d pacelc_rds \
   -c "SELECT application_name, state, sync_state FROM pg_stat_replication ORDER BY 1;"
 ```
 
-> **Por que filtrar por `streaming`.** Durante o `pg_basebackup`, as sessões de clonagem também aparecem em `pg_stat_replication`, com `state='backup'`. Um `count(*)` sem filtro retorna 2 enquanto ainda não existe replicação alguma, e o portão libera cedo demais.
-
-Saída esperada:
+Você deve ver exatamente isto:
 
 ```
  application_name |   state   | sync_state
@@ -163,20 +188,24 @@ Saída esperada:
  standby_sync     | streaming | sync
 ```
 
-## Fase 3: Schema
+Se `sync_state` vier `async` nas duas, o `application_name` não bateu com o nome no `01-init.sh`. Confira a grafia.
+
+## Passo 4 — Criar a tabela
 
 ```bash
 docker exec rds-primary psql -U admin -d pacelc_rds \
   -c "CREATE TABLE IF NOT EXISTS transacoes (id serial PRIMARY KEY, carga varchar(100));"
 ```
 
+O `IF NOT EXISTS` deixa você repetir o laboratório sem erro.
+
 ---
 
-## Fase 4: Eixo ELC — Latência vs. Consistência
+## Teste T3 — Quanto custa a replicação síncrona (eixo ELC)
 
-### Medição com custo fixo amortizado
+### Primeiro, o script de medição
 
-Cada `docker exec ... psql` custa **~500 ms** entre criação do processo e handshake — comparável ou superior ao que se quer medir. O script abaixo mede o custo fixo separadamente e roda N commits numa única sessão:
+Cada `docker exec ... psql` gasta **~500 ms** só para criar o processo e conectar. Se você medir um `INSERT` sozinho, vai medir principalmente isso. O script abaixo mede esse custo fixo à parte e roda 10 commits numa única sessão:
 
 ```bash
 cat > /tmp/rds-elc.sh <<'EOF'
@@ -191,9 +220,9 @@ echo "  $N commits ................. ${T}ms  (~$(( (T-BASE)/N ))ms/commit)"
 EOF
 ```
 
-Cada `INSERT` é seu próprio commit — e é o commit, não o `INSERT`, que a replicação síncrona bloqueia.
+Cada `INSERT` é um commit separado. Isso é proposital: **é o commit que a replicação síncrona bloqueia**, não o `INSERT` em si.
 
-### Os três cenários
+### As funções de caos
 
 ```bash
 chaos_on()  { docker rm -f pumba-rds 2>/dev/null
@@ -201,104 +230,129 @@ chaos_on()  { docker rm -f pumba-rds 2>/dev/null
                 -v /var/run/docker.sock:/var/run/docker.sock \
                 gaiaadm/pumba netem --duration 120s delay --time 2000 "$1" >/dev/null
               sleep 10; }
-chaos_off() { docker stop pumba-rds 2>/dev/null; sleep 30; }
 
-bash /tmp/rds-elc.sh 10 ctrl                              # controle
+chaos_off() { docker stop pumba-rds 2>/dev/null; sleep 30; }
+```
+
+> **Os 30 segundos do `chaos_off` são obrigatórios.** A regra de latência não é removida no instante em que o Pumba para. Sem essa pausa, o próximo teste herda o atraso do anterior. Na primeira validação deste laboratório, a réplica assíncrona apareceu com 1392 ms/commit por causa disso — um resultado totalmente falso.
+>
+> `MSYS_NO_PATHCONV=1` só é necessário no Git Bash do Windows.
+
+### Rodar os três cenários
+
+```bash
+bash /tmp/rds-elc.sh 10 ctrl                              # sem caos
 chaos_on rds-standby-sync ; bash /tmp/rds-elc.sh 10 sync  ; chaos_off
 chaos_on rds-read-replica ; bash /tmp/rds-elc.sh 10 async ; chaos_off
 ```
 
-> **A espera de 30 s em `chaos_off` não é decorativa.** O `netem` não é removido no instante em que o Pumba para. Sem ela, o experimento seguinte herda o atraso do anterior — na primeira execução deste laboratório o cenário assíncrono acusou 1392 ms/commit, um resultado inteiramente espúrio, produzido pelo atraso residual no standby síncrono.
+### O que você vai ver
 
-### Resultado medido
-
-| Cenário | ms/commit | Quadrante |
+| Cenário | Custo por commit | Quadrante |
 | --- | --- | --- |
-| Malha saudável | **1–6 ms** | — |
-| `rds-standby-sync` (síncrono) com 2000 ms | **2042 ms** | **EC** |
-| `rds-read-replica` (assíncrono) com 2000 ms | **5 ms** | **EL** |
+| Sem caos | **1–6 ms** | — |
+| Réplica **síncrona** atrasada em 2000 ms | **2042 ms** | **EC** |
+| Réplica **assíncrona** atrasada em 2000 ms | **5 ms** | **EL** |
 
-Degradar a réplica síncrona multiplica o custo do commit por **~500×**. Degradar a assíncrona — com atraso idêntico, confirmado em 6046 ms de ida e volta contra 64 ms do nó saudável — **não produz efeito mensurável**.
+Atrasar a réplica síncrona multiplica o custo do commit por **~500×**. Atrasar a assíncrona não faz diferença mensurável — e o atraso estava lá: medimos 6046 ms de ida e volta contra ela, versus 64 ms contra o nó saudável.
 
-Este é o teorema em sua forma mais nítida que este repositório consegue produzir: mesmo cluster, mesma carga, mesmo atraso injetado. A única variável é o contrato de replicação, e ela determina integralmente se a latência da rede chega ou não à aplicação cliente.
+Mesmo cluster, mesma carga, mesmo atraso. **A única variável é o contrato de replicação, e ela decide sozinha se a lentidão da rede chega ou não na aplicação.**
 
 ---
 
-## Fase 5: Eixo PAC — Disponibilidade sob Partição
+## Teste T4 — O que acontece quando a réplica some (eixo PAC)
 
-### 5a — Particionando o standby síncrono (Multi-AZ)
+### T4a — Desconectando a réplica síncrona
 
 ```bash
 docker network disconnect pacelc-rds-network rds-standby-sync ; sleep 5
+
 timeout 15 docker exec rds-primary psql -U admin -d pacelc_rds \
   -tAc "INSERT INTO transacoes (carga) VALUES ('part_sync');"
 ```
 
-A operação **bloqueia indefinidamente** — o `timeout 15` a interrompe. O primário se recusa a confirmar um commit que não pode ser replicado ao standby síncrono. Diante da partição, o sistema abdica de **A** para preservar **C**: quadrante **PC**.
+**O `INSERT` trava e não volta.** O `timeout 15` corta depois de 15 segundos; sem ele, ficaria travado indefinidamente.
 
-O uso de `timeout` aqui não é conveniência de script. Sem ele o terminal trava sem retorno, e um `Ctrl+C` deixa a transação em estado ambíguo: gravada localmente, jamais confirmada ao cliente.
+O motivo: o primário se comprometeu a não confirmar nenhum commit sem a confirmação do standby síncrono. Como esse standby sumiu, ele espera — para sempre, se preciso. Diante da partição, o sistema **abre mão de disponibilidade para não perder consistência**. É o quadrante **PC**.
+
+> Use o `timeout` mesmo em teste manual. Sem ele o terminal fica pendurado, e interromper com `Ctrl+C` deixa a transação num estado ambíguo: gravada localmente, nunca confirmada ao cliente.
+
+Reconecte:
 
 ```bash
 docker network connect pacelc-rds-network rds-standby-sync ; sleep 20
 ```
 
-### 5b — Particionando a read replica
+### T4b — Desconectando a read replica
 
 ```bash
 docker network disconnect pacelc-rds-network rds-read-replica ; sleep 5
+
 timeout 15 docker exec rds-primary psql -U admin -d pacelc_rds \
   -tAc "INSERT INTO transacoes (carga) VALUES ('part_async');"
+
 docker network connect pacelc-rds-network rds-read-replica ; sleep 20
 ```
 
-Confirmada em **513 ms**. O contrato assíncrono não estabelece obrigação alguma com este nó: o primário ignora a ruptura e segue atendendo. Quadrante **PA**, ao custo da desatualização silenciosa do nó leitor.
+**Confirma em 513 ms**, como se nada tivesse acontecido. O contrato assíncrono não cria obrigação nenhuma com esse nó: o primário ignora a queda e segue atendendo. É o quadrante **PA** — ao custo de a réplica de leitura ficar desatualizada sem ninguém perceber.
 
-### Matriz consolidada
+### Resumo do T4
 
-| Nó particionado | Contrato | Escrita no primário | Quadrante |
+| Réplica desconectada | Contrato | Escrita no primário | Quadrante |
 | --- | --- | --- | --- |
-| `rds-standby-sync` | síncrono | **Bloqueada indefinidamente** | **PC** |
+| `rds-standby-sync` | síncrono | **Trava sem responder** | **PC** |
 | `rds-read-replica` | assíncrono | OK em 513 ms | **PA** |
 
 ---
 
-## Resultados medidos
+## Tempos medidos
 
 | Etapa | Tempo |
 | --- | --- |
-| Bootstrap até 2 réplicas em streaming | 13 s |
-| T1 — topologia de replicação | <1 s |
-| T2 — schema | 1 s |
-| T3 — eixo ELC (3 cenários, com esperas de limpeza) | 110 s |
+| Subir o cluster até 2 réplicas em streaming | 13 s |
+| T1 — conferir topologia | <1 s |
+| T2 — criar tabela | 1 s |
+| T3 — eixo ELC (3 cenários, com as pausas de limpeza) | 110 s |
 | T4 — eixo PAC (2 partições + restauração) | ~68 s |
 | **Total** | **~3 min** |
 
 ---
 
-## Erros e armadilhas verificados em execução
+## Se algo der errado
 
-| Sintoma | Causa | Correção |
+| O que você vê | Por que acontece | Como resolver |
 | --- | --- | --- |
-| Portão libera sem replicação existir | `pg_basebackup` também aparece em `pg_stat_replication` | Filtrar por `state='streaming'` |
-| `up -d` retorna em 2 s com cluster não pronto | Compose original sem healthchecks | Healthchecks + portão de streaming |
-| Réplica assíncrona "atrasa" os commits | `netem` residual do experimento anterior | Aguardar ~30 s em `chaos_off` |
-| Baselines de ~3500 ms sem caos | Custo de `docker exec` + psql e aquecimento do WAL | Amortizar N commits numa sessão |
-| Terminal travado sem retorno na Fase 5a | Commit síncrono aguarda standby ausente | Envolver em `timeout 15` |
-| `mkdir C:\Program Files\Git\var: Acesso negado` | Git Bash reescreve `/var/run/docker.sock` | Prefixar `MSYS_NO_PATHCONV=1` |
+| Espera libera mas não há replicação | `pg_basebackup` também aparece em `pg_stat_replication` | Filtrar por `state='streaming'` |
+| `up -d` volta em 2 s com cluster não pronto | O compose original não tinha healthcheck | Usar o compose deste README + a espera do Passo 3 |
+| As duas réplicas aparecem como `async` | `application_name` não bate com `synchronous_standby_names` | Conferir a grafia nos dois arquivos |
+| Réplica assíncrona "atrasa" os commits | Latência residual do teste anterior | Esperar 30 s no `chaos_off` |
+| Baseline de ~3500 ms sem caos nenhum | Custo do `docker exec` + psql e aquecimento do WAL | Usar o script que amortiza N commits |
+| Terminal travado sem retorno no T4a | É o resultado esperado do commit síncrono | Envolver em `timeout 15` |
+| `mkdir C:\Program Files\Git\var: Acesso negado` | Git Bash converte `/var/run/docker.sock` | Prefixar `MSYS_NO_PATHCONV=1` |
 
 ---
 
-## Implicações Arquiteturais
+## O que levar disso para o trabalho
 
-Marcar "Multi-AZ" no console da AWS não é uma opção de redundância: é a escolha de um quadrante do PACELC para toda a aplicação. O laboratório mede as duas faces desse contrato com atraso idêntico aplicado a nós de papéis distintos — **2042 ms/commit contra 5 ms/commit** no eixo ELC, e **bloqueio indefinido contra 513 ms** no eixo PAC.
+Marcar "Multi-AZ" no console da AWS não é só ligar redundância. É escolher um quadrante do PACELC para a aplicação inteira, e este laboratório mostra o preço nos dois eixos: **2042 ms vs. 5 ms por commit** quando a rede piora, e **travar vs. responder em 513 ms** quando um nó cai.
 
-A implicação de projeto é que uma implantação Multi-AZ acopla a disponibilidade de escrita da aplicação à saúde da rede entre zonas. É exatamente o que se deseja quando a perda de uma transação confirmada é inaceitável — e é exatamente o que arruína a disponibilidade percebida de um serviço que teria tolerado a perda de alguns segundos de dados. A Read Replica ocupa o extremo oposto: nunca atrapalha a escrita, e nunca garante estar em dia.
+Na prática isso significa que uma implantação Multi-AZ amarra a disponibilidade de escrita da sua aplicação à saúde da rede entre zonas. É exatamente o que você quer quando perder uma transação confirmada é inaceitável — pagamento, emissão fiscal, movimentação de saldo. E é exatamente o que destrói a disponibilidade de um serviço que teria aguentado perder alguns segundos de dados sem consequência.
 
-O PostgreSQL permite habitar posições intermediárias que este laboratório não explora — `synchronous_commit = remote_write` ou `local`, e listas de múltiplos standbys síncronos com quórum (`ANY 1 (s1, s2)`). Vale reexecutar a Fase 4 alterando apenas `synchronous_commit` no `01-init.sh` para ver o custo por commit se mover ao longo do eixo.
+A Read Replica é o oposto: nunca atrapalha a escrita e nunca garante estar em dia. Se você lê dela, precisa assumir que o dado pode estar velho.
+
+### Para explorar depois
+
+O PostgreSQL tem posições intermediárias que este laboratório não cobre. Vale reexecutar o Teste T3 mudando só uma linha no `01-init.sh`:
+
+- `synchronous_commit = remote_write` — espera a réplica receber, mas não gravar em disco;
+- `synchronous_commit = local` — não espera réplica nenhuma;
+- `synchronous_standby_names = 'ANY 1 (standby_sync, read_replica)'` — espera qualquer uma das duas, o que dá tolerância a falha sem perder a garantia.
+
+O custo por commit se move ao longo do eixo conforme você troca essas opções.
 
 ---
 
-## Encerramento
+## Encerrar
 
 ```bash
 docker rm -f pumba-rds 2>/dev/null

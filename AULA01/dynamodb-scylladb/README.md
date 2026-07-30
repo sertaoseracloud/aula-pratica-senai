@@ -1,33 +1,52 @@
-# Tutorial Analítico: Validação do Teorema PACELC com a API do DynamoDB e Bastion Host Containerizado
+# Laboratório 4 — DynamoDB / ScyllaDB: até onde vai o "sempre disponível"
 
-Este roteiro estabelece um campo de testes laboratorial para o teorema PACELC sob a semântica do Amazon DynamoDB. Emuladores locais fornecidos por provedores de nuvem frequentemente mascaram a física dos sistemas distribuídos por operarem sobre arquiteturas monolíticas embutidas. Para tensionar de fato os eixos do teorema, este laboratório emprega o motor ScyllaDB equipado com o módulo Alternator, que traduz os contratos JSON nativos da AWS para um anel de replicação real de três nós.
+**Duração: ~8 minutos** (321 s subindo o anel + 161 s de testes).
 
-A arquitetura inclui um contêiner cliente persistente (bastion host) em modo interativo, eliminando o custo de `docker run` a cada comando e aproximando o arranjo de uma topologia de produção, onde instâncias dedicadas sustentam sessões abertas contra o banco.
+## O que você vai fazer
 
-> **Todos os números, mensagens de erro e comportamentos descritos abaixo foram obtidos executando este laboratório de ponta a ponta.** As seções [Resultados medidos](#resultados-medidos) e [Erros e armadilhas](#erros-e-armadilhas-verificados-em-execução) registram o que a execução real produziu — inclusive onde a intuição falha.
+Subir três nós ScyllaDB com o módulo **Alternator**, que expõe a API do DynamoDB. Você vai usar o `aws` CLI exatamente como usaria contra a AWS de verdade — mesmos comandos, mesmos parâmetros — só apontando para outro endpoint.
+
+Depois vai atrasar a rede e derrubar nós, medindo onde o "sempre disponível" do DynamoDB para de valer.
+
+## Por que não usar o DynamoDB Local
+
+O emulador oficial da AWS roda como processo único. Ele responde os mesmos contratos JSON, mas não tem anel de replicação, não tem quórum, não tem nó para derrubar. Serve para testar código; não serve para estudar comportamento distribuído.
+
+O ScyllaDB com Alternator dá as duas coisas: a mesma API e um cluster real de três nós.
+
+## O que você vai descobrir
+
+O DynamoDB tem fama de "PA/EL" — sempre disponível, consistência eventual por padrão. O laboratório mostra que isso é verdade **até certo ponto**, e o ponto exato é o quórum:
+
+| Nós vivos | Escrita | Leitura forte | Leitura eventual | Quadrante |
+| --- | --- | --- | --- | --- |
+| 2 de 3 | OK | OK | OK | **PA** |
+| 1 de 3 | **Recusada** | **Recusada** | OK | **PC** |
+
+Perder a minoria não afeta nada. Perder o quórum para tudo, menos a leitura eventual.
 
 ---
 
-## Pré-requisitos e garantia de reexecução
+## Antes de começar
 
-Todos os comandos deste tutorial são **idempotentes**: podem ser reexecutados quantas vezes for necessário, na ordem apresentada, sem produzir erro. Isso exige guardas explícitas em três pontos (criação de tabela, desconexão de rede e injeção de caos), detalhadas ao longo do texto.
-
-| Item | Versão validada |
+| O que | Versão testada |
 | --- | --- |
 | Docker Engine | 28.4.0 |
 | Docker Compose | v2.39.2 |
 | ScyllaDB | 5.2.0 |
-| AWS CLI (no bastion) | 2.36.11 |
+| AWS CLI (dentro do contêiner) | 2.36.11 |
 
-**Usuários de Git Bash no Windows:** o Git Bash reescreve caminhos POSIX para caminhos Windows, o que quebra a montagem `/var/run/docker.sock` exigida pelo Pumba. Prefixe **todo** comando `docker` que envolva caminhos absolutos com `MSYS_NO_PATHCONV=1`. Sem isso, o Pumba falha com `mkdir C:\Program Files\Git\var: Acesso negado`. PowerShell, WSL, Linux e macOS não precisam desse prefixo.
+Todos os comandos podem ser repetidos quantas vezes você quiser sem dar erro. Isso exige proteção em três pontos — criação de tabela, desconexão de rede e injeção de caos — e cada um está sinalizado no texto.
+
+**Se você usa Git Bash no Windows:** prefixe todo comando `docker` que tenha caminho absoluto com `MSYS_NO_PATHCONV=1`. Sem isso o Pumba falha com `mkdir C:\Program Files\Git\var: Acesso negado`. PowerShell, WSL, Linux e macOS não precisam.
 
 ---
 
-## Fase 1: Estruturação da Topologia com Cliente Persistente
+## Passo 1 — Criar o docker-compose.yml
 
-A orquestração provisiona três nós de armazenamento e um nó cliente ocioso. O serviço Alternator expõe a porta 8000 nos nós do banco. O contêiner cliente tem seu ponto de entrada subvertido para manter a sessão ativa indefinidamente.
+A topologia é de três nós de banco mais um contêiner cliente ocioso (*bastion host*), que fica de pé só para você executar comandos de dentro da rede do cluster.
 
-> O `docker-compose.yml` é ignorado pelo Git (ver [.gitignore](../../.gitignore)). O conteúdo íntegro está reproduzido abaixo — copie-o para `docker-compose.yml` neste diretório.
+> Este arquivo **não vem no clone** (está no `.gitignore`). Crie `docker-compose.yml` nesta pasta com o conteúdo abaixo.
 
 ```yaml
 services:
@@ -99,31 +118,41 @@ networks:
     driver: bridge
 ```
 
-Três decisões nele merecem justificativa:
+Três decisões merecem explicação.
 
-**`--alternator-write-isolation only_rmw_uses_lwt`** — sem alguma variante desta flag o serviço Alternator não inicializa. O valor escolhido é o que **mais se aproxima da semântica do DynamoDB real**: apenas operações read-modify-write (escritas condicionais, `UpdateItem` com `ConditionExpression`) pagam o custo do consenso Paxos; escritas simples usam quórum comum. A Fase 4 mostra os dois níveis de consistência distintos que essa escolha produz.
+### `--alternator-write-isolation only_rmw_uses_lwt`
 
-> **Variante `always`.** O alias `always` (de `always_use_lwt`) força **toda** escrita a passar por Paxos. Funciona, mas afasta o laboratório do comportamento do DynamoDB: até um `PutItem` trivial vira transação. Vale trocar a flag e repetir a Fase 4 para ver o nível de consistência mudar de `LOCAL_QUORUM` para `LOCAL_SERIAL` nas escritas simples.
+Sem alguma variante dessa flag o Alternator **não inicializa**.
 
-**`--seeds=scylla-node1`** — apenas o primeiro nó é seed. Listar um nó ainda não inicializado como seed atrasa a convergência do Gossip sem benefício.
+O valor escolhido é o que mais se aproxima do DynamoDB real: só operações *read-modify-write* (escrita condicional, `UpdateItem` com `ConditionExpression`) pagam o custo de consenso via Paxos. Escritas simples usam quórum comum, que é mais barato.
 
-**Healthcheck com `hostname -i`** — o Alternator **não faz bind em `127.0.0.1`**; escuta somente no IP do contêiner. Um healthcheck contra `localhost:8000` falha com `http_code=000` mesmo com o serviço saudável. O healthcheck valida o motor CQL *e* a porta Alternator:
+O Teste T4 mostra os dois níveis de consistência distintos que isso produz.
+
+> **Vale experimentar depois:** troque para `always` (alias de `always_use_lwt`), que força **toda** escrita a passar por Paxos, e repita o Teste T4. Você vai ver o nível de consistência mudar de `LOCAL_QUORUM` para `LOCAL_SERIAL` até num `PutItem` trivial. É mais caro e mais distante do DynamoDB, mas mostra bem o efeito da flag.
+
+### `--seeds=scylla-node1`
+
+Só o primeiro nó é seed. Listar um nó que ainda não subiu como seed atrasa a convergência do Gossip sem ganho.
+
+### Healthcheck com `hostname -i`
+
+O Alternator **não escuta em `127.0.0.1`** — só no IP do contêiner. Um healthcheck contra `localhost:8000` retorna `http_code=000` mesmo com o serviço perfeitamente saudável. Por isso:
 
 ```yaml
 test: ["CMD-SHELL", "cqlsh -e 'DESCRIBE KEYSPACES;' && curl -sf http://$$(hostname -i):8000 -o /dev/null"]
 ```
 
-### Inicialização
+O teste valida as duas coisas: o motor CQL e a porta do Alternator.
+
+## Passo 2 — Subir o anel
 
 ```bash
 docker compose up -d --wait
 ```
 
-A flag `--wait` bloqueia até que todos os healthchecks passem. Como os nós sobem em série (cada um aguarda o anterior ficar saudável), **o bootstrap completo leva cerca de 5 minutos** (321 s medidos). Isso é esperado, não um travamento.
+**Isso leva cerca de 5 minutos** (321 s medidos). Os nós sobem em série, cada um esperando o anterior ficar saudável. É lento de propósito, não é travamento.
 
-### Portão de verificação do anel
-
-`--wait` garante que os serviços respondem, mas **não** que os três nós já ingressaram no anel — um nó pode estar em estado `UJ` (Up/Joining) e ainda assim responder aos healthchecks. Antes de prosseguir, aguarde os três `UN` (Up/Normal):
+**Não comece a medir quando o comando voltar.** O `--wait` garante que os healthchecks passaram, mas um nó pode estar em `UJ` (entrando no anel) e ainda assim passar. Espere os três `UN`:
 
 ```bash
 docker exec scylla-node1 bash -c '
@@ -134,31 +163,23 @@ docker exec scylla-node1 bash -c '
   echo "TIMEOUT: anel incompleto"; nodetool status; exit 1'
 ```
 
-Saída esperada:
-
-```
-anel OK: 3 nos UN
-```
-
-Para inspecionar o anel manualmente:
+Para inspecionar o anel a qualquer momento:
 
 ```bash
 docker exec scylla-node1 nodetool status
 ```
 
----
+## Passo 3 — Criar a tabela e gravar um item
 
-## Fase 2: Esquema e Carga de Calibração
-
-Assuma o controle do bastion. A partir daqui, os comandos operam nativamente contra a rede do banco:
+Entre no bastion:
 
 ```bash
 docker exec -it aws-client bash
 ```
 
-### Criação idempotente da tabela
+Daqui em diante os comandos são `aws` puro, apontando para o nó coordenador.
 
-Executar `create-table` duas vezes falha com `ResourceInUseException: Table Pagamentos already exists`. A guarda com `describe-table` torna o passo reexecutável:
+**Criação idempotente.** Rodar `create-table` duas vezes falha com `ResourceInUseException: Table Pagamentos already exists`. A proteção com `describe-table` deixa o passo repetível:
 
 ```bash
 aws dynamodb describe-table --table-name Pagamentos \
@@ -171,7 +192,7 @@ aws dynamodb create-table \
     --endpoint-url http://scylla-node1:8000
 ```
 
-`put-item` é naturalmente idempotente (sobrescreve a chave):
+O `put-item` já é idempotente por natureza (sobrescreve a chave):
 
 ```bash
 aws dynamodb put-item \
@@ -180,9 +201,9 @@ aws dynamodb put-item \
     --endpoint-url http://scylla-node1:8000
 ```
 
-### Confirmação do fator de replicação
+### Confirme o fator de replicação
 
-O Alternator cria um keyspace próprio. Vale confirmar o RF, pois ele define o quórum que sustenta as Fases 3 e 4:
+Vale conferir, porque é ele que define o quórum que sustenta os dois testes seguintes:
 
 ```bash
 docker exec scylla-node1 cqlsh -e 'DESCRIBE KEYSPACE "alternator_Pagamentos";' | head -1
@@ -192,29 +213,31 @@ docker exec scylla-node1 cqlsh -e 'DESCRIBE KEYSPACE "alternator_Pagamentos";' |
 CREATE KEYSPACE "alternator_Pagamentos" WITH replication = {'class': 'NetworkTopologyStrategy', 'datacenter1': '3'} AND durable_writes = true;
 ```
 
-**RF = 3 em 3 nós.** Todo nó é réplica de toda partição, e o quórum é 2. Esse único fato explica tudo o que se segue.
+**RF = 3 em 3 nós.** Todo nó guarda cópia de tudo, e o quórum é 2. Guarde esse número — ele explica todo o resto.
 
 ---
 
-## Fase 3: Tensionar o eixo ELC (Else: Latency vs. Consistency)
+## Teste T3 — Quanto custa a leitura forte (eixo ELC)
 
-### Por que atrasar um só nó não funciona
+### Primeiro: por que atrasar um nó só não funciona
 
-A abordagem intuitiva — degradar `scylla-node2` e observar a leitura forte ficar lenta — **não produz efeito algum**. Medição real com 2000 ms injetados apenas no `node2`:
+O caminho intuitivo seria degradar o `scylla-node2` e ver a leitura forte ficar lenta. **Não produz efeito nenhum.** Medido, com 2000 ms injetados só no `node2`:
 
-| Modo | Latência observada |
+| Modo | Latência |
 | --- | --- |
 | Leitura forte (`--consistent-read`) | 12 ms |
 | Leitura eventual | 12 ms |
 
-O motivo é o RF = 3. A leitura forte usa `LOCAL_QUORUM`, que exige 2 das 3 réplicas. O coordenador `node1` é ele próprio uma réplica e responde instantaneamente; `node3` está saudável e completa o quórum. **O nó degradado nunca entra no caminho crítico.** Para forçar o quórum a esperar, é preciso degradar **dois** nós.
+O motivo é o RF=3. A leitura forte usa `LOCAL_QUORUM`, que precisa de 2 das 3 réplicas. O coordenador `node1` é ele mesmo uma réplica e responde na hora; o `node3` está saudável e fecha o quórum. **O nó lento simplesmente não é usado.**
 
-### Injeção de caos
+Para forçar o quórum a esperar, é preciso degradar **dois** nós.
 
-Em um segundo terminal no hospedeiro:
+### Injetar a latência
+
+Num segundo terminal, no host:
 
 ```bash
-# Guarda de idempotência: remove execução anterior, se existir
+# Proteção: remove execução anterior, se existir
 docker rm -f pumba-elc 2>/dev/null
 
 MSYS_NO_PATHCONV=1 docker run -d --name pumba-elc --rm \
@@ -223,7 +246,7 @@ MSYS_NO_PATHCONV=1 docker run -d --name pumba-elc --rm \
   scylla-node2 scylla-node3
 ```
 
-Confirme que o atraso está ativo (o `node2` deve levar segundos; o `node1`, milissegundos):
+Confirme que pegou — o `node2` deve responder em segundos, o `node1` em milissegundos:
 
 ```bash
 docker exec aws-client bash -c '
@@ -231,11 +254,13 @@ docker exec aws-client bash -c '
   time curl -s -o /dev/null http://scylla-node1:8000'
 ```
 
-### O contraste ELC só emerge sob carga contínua
+### Segundo: por que medir com comando avulso não funciona
 
-Este é o achado menos intuitivo do laboratório e **invalida a medição por comando avulso**.
+Este é o achado menos óbvio do laboratório.
 
-O ScyllaDB usa um *dynamic snitch*, que pontua réplicas pela latência observada e roteia leituras `LOCAL_ONE` (eventuais) para a mais rápida. Esse aprendizado exige requisições sucessivas. Medindo com **1 segundo de intervalo** entre chamadas, o contraste desaparece por completo:
+O ScyllaDB usa um *dynamic snitch*: ele pontua as réplicas pela latência observada e manda as leituras eventuais (`LOCAL_ONE`) para a mais rápida. Só que esse aprendizado precisa de requisições seguidas para acontecer.
+
+Medindo com **1 segundo de intervalo** entre chamadas, a diferença desaparece:
 
 | Iteração | Eventual | Forte |
 | --- | --- | --- |
@@ -243,9 +268,13 @@ O ScyllaDB usa um *dynamic snitch*, que pontua réplicas pela latência observad
 | 5 | 2026 ms | 2020 ms |
 | 10 | 2019 ms | 2024 ms |
 
-Com o snitch "frio", o coordenador volta a sondar as réplicas degradadas e a leitura eventual paga o mesmo preço da forte.
+Com o snitch "frio", o coordenador volta a sondar as réplicas lentas e a leitura eventual paga o mesmo preço da forte. **Ou seja: rodar um `aws get-item` avulso, como manda a intuição, não demonstra nada.**
 
-Portanto, meça **em rajada e com aquecimento**. Copie o script abaixo para o bastion:
+Some a isso que o AWS CLI v2 gasta **~1000 ms só para iniciar** (é Python), contra ~12 ms da operação real. Um `time aws dynamodb get-item` mede principalmente o interpretador.
+
+### O script correto
+
+Ele mede em rajada, com aquecimento, e fala HTTP direto para não pagar o startup do CLI:
 
 ```bash
 cat > /tmp/medir-elc.sh <<'EOF'
@@ -278,52 +307,49 @@ EOF
 bash /tmp/medir-elc.sh 20
 ```
 
-Resultado sob caos:
+Rode uma vez **sem** o Pumba (controle) e outra **com** ele ligado.
+
+### O que você vai ver
+
+Sob caos:
 
 ```
-  amostras: 20 (apos 10 de aquecimento)
   EL  (eventual, CL=LOCAL_ONE) .... mediana 15ms
   EC  (forte,   CL=LOCAL_QUORUM) .. mediana 2012ms
 ```
 
-E o mesmo script **sem** caos, como controle:
+Sem caos:
 
 ```
   EL  (eventual, CL=LOCAL_ONE) .... mediana 12ms
   EC  (forte,   CL=LOCAL_QUORUM) .. mediana 13ms
 ```
 
-**Leitura do resultado.** Sem assimetria de latência na malha, EL e EC custam o mesmo (12 ms vs. 13 ms) — consistência forte não é intrinsecamente cara. Sob degradação, a leitura forte precisa equalizar o estado com uma réplica lenta e paga **~134× mais** (2012 ms vs. 15 ms). O custo da consistência não é um valor fixo: é uma função da saúde da malha.
+**Como ler isso.** Sem problema na rede, leitura forte e eventual custam o mesmo (13 ms contra 12 ms) — consistência forte não é cara por natureza. Com dois nós degradados, a leitura forte precisa esperar uma réplica lenta e passa a custar **~134× mais**.
+
+O preço da consistência não é fixo: é função da saúde da rede.
 
 Encerre o caos:
 
 ```bash
 docker stop pumba-elc 2>/dev/null
+sleep 30
 ```
 
-### Por que não medir com `aws` avulso
-
-O AWS CLI v2 leva **~1000 ms apenas para inicializar** (interpretador Python), enquanto a operação real no banco custa ~12 ms. Medição isolada:
-
-```
-cli-startup-only: 1001ms
-5 leituras quorum via HTTP puro: 50ms total
-```
-
-O bastion host elimina o custo do `docker run`, mas **não** elimina o startup do CLI. Um `time aws dynamodb get-item` mede predominantemente Python, não o banco. Por isso o script acima usa HTTP direto via `curl`.
+> Os 30 segundos evitam que a próxima medição herde este atraso.
 
 ---
 
-## Fase 4: Problematizar o eixo PAC sob ruptura sistêmica
+## Teste T4 — Até onde vai a disponibilidade (eixo PAC)
 
-As desconexões de rede **não são idempotentes**: repetir `disconnect` falha com `is not connected to network` e repetir `connect` falha com `endpoint with name scylla-node3 already exists`. Use guardas:
+Desconectar e reconectar rede **não é idempotente**: repetir `disconnect` dá `is not connected to network`, e repetir `connect` dá `endpoint with name scylla-node3 already exists`. Use funções com proteção:
 
 ```bash
 net_out() { docker network disconnect pacelc-dynamo-network "$1" 2>/dev/null; echo "  $1 fora da rede"; }
 net_in()  { docker network connect    pacelc-dynamo-network "$1" 2>/dev/null; echo "  $1 de volta na rede"; }
 ```
 
-### 4a — Um nó fora: o quórum se mantém
+### T4a — Um nó fora: o quórum aguenta
 
 ```bash
 net_out scylla-node3
@@ -339,13 +365,11 @@ aws dynamodb put-item \
     --endpoint-url http://scylla-node1:8000
 ```
 
-A escrita **conclui normalmente**. O motivo, porém, não é tolerância a falhas por retenção local: com RF = 3, o quórum é 2, e os dois nós restantes ainda o satisfazem. É uma escrita de quórum legítima, plenamente durável — não um enfileiramento para reconciliação posterior.
+**A escrita passa normalmente.** E é importante entender o motivo certo: não é que o banco guardou localmente para reconciliar depois. Com RF=3 o quórum é 2, e os dois nós restantes atendem. É uma escrita de quórum legítima, totalmente durável.
 
-Este é o comportamento **PA** que o DynamoDB real exibe: perder uma minoria de réplicas não interrompe o serviço. Todas as quatro operações permanecem disponíveis.
+Este é o comportamento **PA** que o DynamoDB real exibe: perder uma minoria de réplicas não interrompe o serviço.
 
-### 4b — Dois nós fora: o quórum se rompe
-
-Este é o teste decisivo, e é ele que separa a hipótese "PA" da realidade:
+### T4b — Dois nós fora: o quórum quebra
 
 ```bash
 net_out scylla-node2
@@ -368,7 +392,7 @@ An error occurred (InternalServerError) when calling the PutItem operation:
 exceptions::unavailable_exception (Cannot achieve consistency level for cl LOCAL_QUORUM. Requires 2, alive 1)
 ```
 
-Repita agora com uma escrita **condicional**, que é read-modify-write e por isso usa Paxos:
+Agora repita com uma escrita **condicional**, que é read-modify-write e por isso usa Paxos:
 
 ```bash
 aws dynamodb update-item \
@@ -385,12 +409,12 @@ aws dynamodb update-item \
 Cannot achieve consistency level for cl LOCAL_SERIAL. Requires 2, alive 1
 ```
 
-O nível de consistência muda de `LOCAL_QUORUM` para `LOCAL_SERIAL` — é a assinatura do Paxos, acionado só pela operação condicional. Ambas falham, mas por caminhos diferentes.
+Repare que o nível mudou de `LOCAL_QUORUM` para `LOCAL_SERIAL`. Essa é a assinatura do Paxos, acionado só pela operação condicional. As duas falham, mas por caminhos diferentes.
 
-Agora as duas leituras, sob a mesma partição:
+Por fim, as duas leituras sob a mesma partição:
 
 ```bash
-# Eventual — sobrevive
+# Eventual — funciona
 aws dynamodb get-item --table-name Pagamentos \
     --key '{"Id": {"S": "txn_001"}}' \
     --endpoint-url http://scylla-node1:8000
@@ -405,31 +429,26 @@ aws dynamodb get-item --table-name Pagamentos \
 Cannot achieve consistency level for cl LOCAL_QUORUM. Requires 2, alive 1
 ```
 
-### O que isso demonstra
+### A matriz completa
 
-Matriz completa medida (`only_rmw_uses_lwt`, RF = 3):
-
-| Operação | Nível de consistência | 3 nós | 2 nós | 1 nó |
+| Operação | Nível usado | 3 nós | 2 nós | 1 nó |
 | --- | --- | --- | --- | --- |
 | `PutItem` simples | `LOCAL_QUORUM` | OK | OK | **Recusada** |
-| `UpdateItem` condicional (RMW) | `LOCAL_SERIAL` (Paxos) | OK | OK | **Recusada** |
+| `UpdateItem` condicional | `LOCAL_SERIAL` (Paxos) | OK | OK | **Recusada** |
 | `GetItem --consistent-read` | `LOCAL_QUORUM` | OK | OK | **Recusada** |
 | `GetItem` (eventual) | `LOCAL_ONE` | OK | OK | **OK** |
 
-A leitura da tabela é a lição do laboratório:
+**Com falha minoritária (1 de 3), o sistema é PA.** Nada se degrada — exatamente como o DynamoDB gerenciado. É para esse regime que serviços de nuvem são dimensionados, e é por isso que o rótulo "PA" se sustenta na prática.
 
-**Contra falha minoritária (1 de 3), o sistema é PA**: nada se degrada, exatamente como o DynamoDB gerenciado. É este o regime para o qual serviços de nuvem são dimensionados, e é por isso que a rótulo "PA" se sustenta na prática.
+**Com falha majoritária (2 de 3), o quórum quebra e o sistema vira PC.** Escritas e leituras fortes são recusadas para não admitir divergência. Sobra só a leitura eventual, que responde de uma réplica só e pode devolver dado velho.
 
-**Contra falha majoritária (2 de 3), o quórum se rompe e o sistema passa a PC**: escritas e leituras fortes são recusadas para não admitir divergência de estado. Sobra apenas a leitura eventual (`LOCAL_ONE`), que responde de uma única réplica e pode devolver dado obsoleto.
+Vale notar o que **não** muda o resultado: trocar a flag para `always` move as escritas simples de `LOCAL_QUORUM` para `LOCAL_SERIAL`, mas não muda a disponibilidade. O custo sobe, a fronteira do quórum fica no mesmo lugar. **Nenhum ajuste de isolamento torna a escrita disponível sem quórum** — no Alternator o caminho de escrita é sempre baseado em quórum.
 
-A conclusão relevante para arquitetura é que **o quadrante não é uma propriedade do produto, e sim da configuração e da severidade da falha**. Trocar a flag para `always` move as escritas simples de `LOCAL_QUORUM` para `LOCAL_SERIAL` sem alterar a disponibilidade — o custo sobe, a fronteira do quórum não se move. E nenhum ajuste de isolamento torna a escrita disponível sob perda de quórum: no Alternator o caminho de escrita é sempre quorum-based.
-
-### Restauração
+### Restaurar
 
 ```bash
-net_in scylla-node2
-net_in scylla-node3
-sleep 20
+net_in scylla-node2 ; net_in scylla-node3 ; sleep 20
+
 docker exec scylla-node1 bash -c '
   for i in $(seq 1 60); do
     [ "$(nodetool status | grep -c "^UN")" = "3" ] && { echo "anel restaurado: 3 UN"; exit 0; }
@@ -437,78 +456,70 @@ docker exec scylla-node1 bash -c '
   done; exit 1'
 ```
 
-O anel reconverge e os contêineres preservam seus endereços IP originais.
+Os contêineres voltam com os mesmos IPs.
 
 ---
 
-## Resultados medidos
-
-Consolidado de uma execução completa em cluster recém-criado:
-
-| Cenário | EL (eventual) | EC (forte) | Razão |
-| --- | --- | --- | --- |
-| Malha saudável | 12 ms | 13 ms | 1,1× |
-| Delay 2000 ms em **1** nó | 12 ms | 12 ms | 1,0× (sem efeito) |
-| Delay 2000 ms em **2** nós | 15 ms | 2012 ms | **134×** |
-| Delay 2000 ms, requisições espaçadas em 1 s | 2019 ms | 2024 ms | 1,0× (snitch frio) |
-
-| Nós vivos | `PutItem` | `UpdateItem` cond. | Leitura forte | Leitura eventual | Quadrante |
-| --- | --- | --- | --- | --- | --- |
-| 3 | OK | OK | OK | OK | — |
-| 2 | OK | OK | OK | OK | **PA** |
-| 1 | **Recusada** | **Recusada** | **Recusada** | OK | **PC** |
-
-Tempos de execução medidos:
+## Tempos medidos
 
 | Etapa | Tempo |
 | --- | --- |
-| Bootstrap do cluster (`up -d --wait`) | 321 s |
-| T1 — portão do anel | 2 s |
+| Subir o anel (`up -d --wait`) | 321 s |
+| T1 — esperar o anel fechar | 2 s |
 | T2 — schema + carga | 3 s |
 | T3 — eixo ELC | 76 s |
 | T4 — eixo PAC + restauração | 80 s |
-| **Total (bootstrap + testes)** | **~8 min** |
+| **Total** | **~8 min** |
 
-Custos de referência: startup do AWS CLI v2 **~1001 ms** por invocação; operação Alternator via HTTP direto **~12 ms**.
+### Resumo das medições
+
+| Cenário | EL (eventual) | EC (forte) | Razão |
+| --- | --- | --- | --- |
+| Rede saudável | 12 ms | 13 ms | 1,1× |
+| Delay 2000 ms em **1** nó | 12 ms | 12 ms | 1,0× (sem efeito) |
+| Delay 2000 ms em **2** nós | 15 ms | 2012 ms | **134×** |
+| Delay 2000 ms, chamadas espaçadas em 1 s | 2019 ms | 2024 ms | 1,0× (snitch frio) |
+
+Custos de referência: AWS CLI v2 **~1001 ms** por invocação; operação Alternator via HTTP direto **~12 ms**.
 
 ---
 
-## Erros e armadilhas verificados em execução
+## Se algo der errado
 
-| Sintoma | Causa | Correção |
+| O que você vê | Por que acontece | Como resolver |
 | --- | --- | --- |
 | Alternator não inicializa | Flag `--alternator-write-isolation` ausente ou inválida | Usar `only_rmw_uses_lwt` (ou `always`) |
-| Resultado de caos contaminado | `netem` não é removido instantaneamente ao parar o Pumba | Aguardar ~30 s entre experimentos de caos |
-| Healthcheck falha com `http_code=000` | Alternator não faz bind em `127.0.0.1` | Sondar `http://$(hostname -i):8000` |
-| `ResourceInUseException` ao repetir o tutorial | `create-table` não é idempotente | Guardar com `describe-table \|\| create-table` |
+| Healthcheck falha com `http_code=000` | Alternator não escuta em `127.0.0.1` | Sondar `http://$(hostname -i):8000` |
+| `ResourceInUseException` ao repetir | `create-table` não é idempotente | Proteger com `describe-table \|\| create-table` |
 | `is not connected to network` | `disconnect` não é idempotente | Sufixar `2>/dev/null` |
 | `endpoint with name X already exists` | `connect` não é idempotente | Sufixar `2>/dev/null` |
-| `mkdir C:\Program Files\Git\var: Acesso negado` | Git Bash reescreve `/var/run/docker.sock` | Prefixar `MSYS_NO_PATHCONV=1` |
+| `mkdir C:\Program Files\Git\var: Acesso negado` | Git Bash converte `/var/run/docker.sock` | Prefixar `MSYS_NO_PATHCONV=1` |
 | Nome de contêiner Pumba em conflito | Execução anterior não removida | `docker rm -f pumba-elc 2>/dev/null` antes |
-| Leitura forte não fica lenta | Só um nó degradado; quórum satisfeito pelos saudáveis | Degradar **dois** nós |
-| EL e EC igualmente lentas | Snitch frio por requisições espaçadas | Medir em rajada, após aquecimento |
-| Latências ~1000 ms sem caos | Startup do AWS CLI v2 | Medir via HTTP direto (`curl`) |
-| Nó em `UJ` após `--wait` | Healthcheck não implica ingresso no anel | Aguardar 3× `UN` em `nodetool status` |
+| Leitura forte não fica lenta | Só um nó degradado; quórum fechado pelos saudáveis | Degradar **dois** nós |
+| EL e EC igualmente lentas | Snitch frio por chamadas espaçadas | Medir em rajada, com aquecimento |
+| Latências de ~1000 ms sem caos | Startup do AWS CLI v2 | Medir via HTTP direto (`curl`) |
+| Nó em `UJ` depois do `--wait` | Healthcheck não garante ingresso no anel | Esperar 3× `UN` |
+| Resultado de caos contaminado | `netem` não some na hora | Esperar ~30 s entre experimentos |
 
 ---
 
-## Fechamento Analítico
+## O que levar disso para o trabalho
 
-O isolamento do cliente em contêiner persistente aproxima o laboratório de uma arquitetura de produção, mas o experimento mostra que essa purificação é parcial: o custo dominante da medição passou a ser o startup do próprio AWS CLI, não a infraestrutura. Instrumentação honesta exigiu descer ao protocolo HTTP.
+O bastion host aproxima o laboratório de uma arquitetura de produção, mas o experimento mostra que a purificação é parcial: o custo dominante da medição virou o startup do próprio AWS CLI, não a infraestrutura. Medir honestamente exigiu descer ao HTTP.
 
-Três resultados desmontam intuições comuns sobre sistemas distribuídos:
+Três resultados desmontam intuições comuns:
 
-1. **Consistência forte não é intrinsecamente cara.** Em malha saudável, EC custou o mesmo que EL (13 ms vs. 12 ms). O preço da consistência é uma função da degradação da rede, não uma taxa fixa — e sob estresse essa função é abrupta, saltando para 134×.
+**1. Consistência forte não é cara por natureza.** Em rede saudável, EC custou o mesmo que EL (13 ms contra 12 ms). O preço é função da degradação da rede, e sob estresse a função é abrupta: salta para 134×. Isso significa que o custo não aparece em teste de carga — aparece no incidente.
 
-2. **O quadrante depende da severidade da falha, não só do produto.** O mesmo cluster é PA ao perder uma réplica minoritária e PC ao perder o quórum, quando recusa escritas para não admitir divergência. Chamar o ScyllaDB de "banco AP" sem qualificar o modo de falha e a configuração é impreciso.
+**2. O quadrante depende da severidade da falha, não só do produto.** O mesmo cluster é PA ao perder uma réplica e PC ao perder o quórum. Chamar o ScyllaDB de "banco AP" sem qualificar o modo de falha e a configuração é impreciso.
 
-3. **A topologia determina o que um experimento consegue observar.** Com RF = 3 em 3 nós, degradar um único nó não produz sinal algum, porque o quórum se forma sem ele. Um experimento mal dimensionado produz a conclusão errada com toda a aparência de rigor.
+**3. A topologia decide o que o experimento consegue enxergar.** Com RF=3 em 3 nós, degradar um único nó não produz sinal nenhum, porque o quórum se forma sem ele. Um experimento mal dimensionado devolve a conclusão errada com toda a aparência de rigor — e foi exatamente isso que aconteceu na primeira versão deste laboratório.
 
-Para o projeto de software escalável, a lição é assimilar a consistência eventual como regra arquitetural primária e reservar a coerência absoluta às operações em que a divergência de estado comprometa o domínio de negócio de forma irreversível — sabendo que, nessas operações, o sistema pode legitimamente recusar-se a responder.
+Para o projeto de sistemas escaláveis, a recomendação é adotar consistência eventual como padrão e reservar a coerência forte às operações onde a divergência de estado causa dano irreversível — sabendo que, nessas operações, o sistema pode legitimamente se recusar a responder.
 
 ---
 
-## Encerramento do laboratório
+## Encerrar
 
 ```bash
 docker rm -f pumba-elc 2>/dev/null

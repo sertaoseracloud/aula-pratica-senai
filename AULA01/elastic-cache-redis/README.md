@@ -1,18 +1,28 @@
-# Tutorial Analítico: Validação do Teorema PACELC em Memória (Emulação ElastiCache com Redis)
+# Laboratório 2 — ElastiCache / Redis: o banco que nunca diz não
 
-O Amazon ElastiCache, ancorado no motor Redis, é comercializado como o ápice da baixa latência — e sustenta essa métrica através de replicação **assíncrona**. Este laboratório orquestra um agrupamento Redis (um primário, duas réplicas, um cliente bastion) e usa o comando de barreira `WAIT` para transitar o banco entre os quadrantes do PACELC.
+**Duração: ~2 minutos** (60 s subindo + ~65 s de testes). É o laboratório mais rápido do repositório.
 
-O resultado central deste laboratório o distingue de todos os outros do repositório: **o Redis nunca recusa uma escrita**. Nem sob degradação, nem sob partição total. O `WAIT` não impede a escrita — apenas revela, depois do fato, quantas réplicas a receberam.
+## O que você vai fazer
 
-> Todos os números abaixo foram obtidos executando este laboratório de ponta a ponta.
+Subir um Redis com um primário e duas réplicas, e usar o comando `WAIT` para forçar o primário a esperar confirmação das réplicas antes de liberar o cliente.
 
-**Tempo total estimado: ~2 minutos** (bootstrap 60 s + testes ~65 s). É o laboratório mais rápido do repositório.
+Depois você vai atrasar uma réplica e desconectar as duas, observando o que muda.
+
+## O que você vai descobrir
+
+O resultado central deste laboratório separa o Redis de todos os outros deste repositório:
+
+**O Redis nunca recusa uma escrita.** Nem com uma réplica lenta, nem com uma réplica fora, nem com o primário completamente isolado. O `SET` sempre volta `OK`.
+
+O `WAIT` **não impede** a escrita. Ele só conta, depois do fato, quantas réplicas receberam o dado. O que você faz com essa informação é problema seu — o banco não decide por você.
+
+Há ainda uma armadilha de medição que faz o teste passar sem provar nada. Ela está no Passo 3, e vale ler antes de rodar qualquer coisa.
 
 ---
 
-## Fase 1: Topologia de Replicação em Memória
+## Passo 1 — Criar o docker-compose.yml
 
-> O `docker-compose.yml` é ignorado pelo Git (ver [.gitignore](../../.gitignore)). Copie o conteúdo abaixo para `docker-compose.yml` neste diretório.
+> Este arquivo **não vem no clone** (está no `.gitignore`). Crie `docker-compose.yml` nesta pasta com o conteúdo abaixo.
 
 ```yaml
 services:
@@ -82,16 +92,18 @@ networks:
     driver: bridge
 ```
 
-O healthcheck das réplicas verifica `master_link_status:up`, não apenas `PING`. Um Redis réplica responde `PONG` muito antes de concluir a sincronização inicial com o primário; sem essa distinção o laboratório começa a medir antes de existir replicação.
+**Por que o healthcheck das réplicas checa `master_link_status:up` e não só `PING`:** uma réplica Redis responde `PONG` bem antes de terminar de sincronizar com o primário. Se o healthcheck fosse só o `PING`, o laboratório começaria a medir antes de existir replicação, e os números não significariam nada.
 
-### Inicialização
+## Passo 2 — Subir e conferir
 
 ```bash
 docker compose up -d --wait
-docker exec redis-client redis-cli -h redis-primary INFO replication | grep -E "role|connected_slaves|slave[0-9]"
+
+docker exec redis-client redis-cli -h redis-primary INFO replication \
+  | grep -E "role|connected_slaves|slave[0-9]"
 ```
 
-Saída esperada:
+Você deve ver:
 
 ```
 role:master
@@ -100,37 +112,46 @@ slave0:ip=172.20.0.3,port=6379,state=online,offset=14,lag=1
 slave1:ip=172.20.0.4,port=6379,state=online,offset=14,lag=1
 ```
 
+Se `connected_slaves` vier `0` ou `1`, espere alguns segundos e repita.
+
 ---
 
-## Fase 2: A armadilha do `WAIT` — leia antes de medir
+## Passo 3 — A armadilha do `WAIT` (leia antes de medir)
 
-Esta é a armadilha mais séria do laboratório, e ela **falha silenciosamente**: o teste parece passar e não prova nada.
+Esta é a parte mais importante do laboratório, e o perigo dela é que **o teste errado parece funcionar**. Não dá erro, não trava, devolve um número plausível. E não prova nada.
 
-O `WAIT n timeout` bloqueia até que `n` réplicas confirmem as escritas **da conexão que o executou**. Se `SET` e `WAIT` viajarem em conexões diferentes, o `WAIT` não tem escrita pendente para aguardar e retorna imediatamente, devolvendo apenas a contagem de réplicas conectadas.
+### Como o `WAIT` funciona de verdade
 
-Cada invocação de `redis-cli` abre uma conexão nova. Portanto:
+`WAIT n timeout` espera até que `n` réplicas confirmem **as escritas feitas por aquela conexão específica**.
+
+A palavra decisiva é *conexão*. Se o `WAIT` roda numa conexão que não escreveu nada, ele não tem o que esperar: retorna na hora, devolvendo só a contagem de réplicas conectadas.
+
+E aqui está o problema: **cada vez que você chama `redis-cli`, abre uma conexão nova.**
 
 ```bash
-# ERRADO — duas conexoes. Retorna em ~13ms mesmo com replica degradada.
+# ERRADO — duas invocações, duas conexões.
+# O WAIT não sabe do SET anterior e volta em ~13ms mesmo com réplica degradada.
 redis-cli -h redis-primary SET k v
 redis-cli -h redis-primary WAIT 2 5000
 ```
 
 ```bash
-# CERTO — uma unica conexao, comandos no mesmo fluxo.
+# CERTO — uma única conexão, os dois comandos no mesmo fluxo.
 printf 'SET k v\nWAIT 2 5000\n' | redis-cli -h redis-primary
 ```
 
-Medição do erro, com `redis-replica-1` degradada em 2000 ms:
+### A diferença medida
 
-| Forma | Tempo | Veredito |
+Com a `redis-replica-1` atrasada em 2000 ms:
+
+| Como você escreve | Tempo | O que significa |
 | --- | --- | --- |
-| Conexões separadas | 13 ms | falso negativo — não prova nada |
+| Conexões separadas | 13 ms | **falso negativo** — não testou nada |
 | Mesma conexão | 2024 ms | correto |
 
-No `redis-cli` interativo o problema não aparece, porque a sessão é uma só. Ele surge ao automatizar o laboratório em script — que é exatamente como se produzem medições reproduzíveis.
+No `redis-cli` interativo isso não aparece, porque a sessão é uma só do começo ao fim. O problema surge quando você automatiza o laboratório em script — que é justamente o que se faz para ter medição reproduzível.
 
-Script de medição correto:
+### O script correto
 
 ```bash
 cat > /tmp/redis-lab.sh <<'EOF'
@@ -146,11 +167,13 @@ docker cp /tmp/redis-lab.sh redis-client:/tmp/redis-lab.sh
 docker exec redis-client bash /tmp/redis-lab.sh
 ```
 
+A função `sq` é o que garante a conexão única: ela manda os dois comandos pelo mesmo `redis-cli`.
+
 ---
 
-## Fase 3: Eixo ELC — Latência vs. Consistência
+## Teste T2 — Quanto custa esperar as réplicas (eixo ELC)
 
-Injete 2000 ms de atraso em **uma** das réplicas:
+Atrase **uma** das réplicas em 2 segundos:
 
 ```bash
 docker rm -f pumba-redis 2>/dev/null
@@ -158,59 +181,79 @@ MSYS_NO_PATHCONV=1 docker run -d --name pumba-redis --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   gaiaadm/pumba netem --duration 3m delay --time 2000 redis-replica-1
 sleep 8
+
 docker exec redis-client bash /tmp/redis-lab.sh
 ```
 
-> `MSYS_NO_PATHCONV=1` é necessário apenas no Git Bash do Windows.
+> `MSYS_NO_PATHCONV=1` só é necessário no Git Bash do Windows.
 
-### Resultado medido
+### O que você vai ver
 
-| Operação | Sem caos | `redis-replica-1` com 2000 ms |
+| Operação | Sem caos | Com `redis-replica-1` atrasada |
 | --- | --- | --- |
-| `SET` sem barreira (EL) | 16 ms | **15 ms** |
+| `SET` sem barreira | 16 ms | **15 ms** |
 | `SET` + `WAIT 1 5000` | 18 ms | **15 ms** |
-| `SET` + `WAIT 2 5000` (EC) | 18 ms | **2024 ms** |
+| `SET` + `WAIT 2 5000` | 18 ms | **2024 ms** |
 
-A gradação entre `WAIT 1` e `WAIT 2` é o achado mais elegante deste laboratório. Com uma réplica saudável e outra degradada, `WAIT 1` é satisfeito instantaneamente pela réplica rápida; `WAIT 2` obriga o cliente a esperar a lenta. **O eixo ELC não é binário — é um dial**, e o `WAIT` é o botão que o gira.
+Repare na linha do meio. Com uma réplica saudável e outra lenta:
 
-Encerre o caos e aguarde a limpeza do `netem`:
+- `WAIT 1` pede **uma** confirmação — a réplica rápida atende na hora, e você nem percebe que a outra está mal.
+- `WAIT 2` pede **as duas** — agora você é obrigado a esperar a lenta.
+
+**O eixo ELC não é uma chave liga/desliga, é um dial.** O `WAIT` é o botão, e você escolhe a posição por operação: `WAIT 0` para um contador de visitas, `WAIT 2` para uma trava distribuída.
+
+Encerre o caos e espere a limpeza:
 
 ```bash
 docker stop pumba-redis 2>/dev/null
 sleep 30
 ```
 
+> Os 30 segundos evitam que o próximo teste herde este atraso.
+
 ---
 
-## Fase 4: Eixo PAC — Disponibilidade sob Partição
+## Teste T3 — O que acontece quando as réplicas somem (eixo PAC)
 
 ```bash
 net_out() { docker network disconnect pacelc-elasticache-network "$1" 2>/dev/null; }
 net_in()  { docker network connect    pacelc-elasticache-network "$1" 2>/dev/null; }
 
-docker exec redis-client bash /tmp/redis-lab.sh          # 2 réplicas
+docker exec redis-client bash /tmp/redis-lab.sh          # com 2 réplicas
 net_out redis-replica-2 ; sleep 12
-docker exec redis-client bash /tmp/redis-lab.sh          # 1 réplica
+docker exec redis-client bash /tmp/redis-lab.sh          # com 1 réplica
 net_out redis-replica-1 ; sleep 12
-docker exec redis-client bash /tmp/redis-lab.sh          # 0 réplicas
+docker exec redis-client bash /tmp/redis-lab.sh          # com 0 réplicas
 net_in redis-replica-1 ; net_in redis-replica-2 ; sleep 15
 ```
 
-### Resultado medido
+### O que você vai ver
 
-| Réplicas conectadas | `SET` puro | `WAIT 1 5000` | `WAIT 2 5000` |
+| Réplicas alcançáveis | `SET` puro | `WAIT 1 5000` | `WAIT 2 5000` |
 | --- | --- | --- | --- |
 | 2 | 14 ms | 15 ms → `1` | 15 ms → `2` |
 | 1 | 20 ms | 16 ms → `1` | **5098 ms → `1`** |
 | 0 | 22 ms | **5103 ms → `0`** | **5117 ms → `0`** |
 
-Duas leituras se impõem:
+Duas coisas para observar com atenção.
 
-**O `SET` puro nunca falha.** Mesmo com o primário completamente isolado, sem uma única réplica alcançável, a escrita é aceita em 22 ms. Este é o quadrante **PA** em sua forma mais pura — e mais perigosa. O Cassandra e o ScyllaDB, na mesma situação, **recusam** a escrita. O Redis a aceita e não avisa.
+### O `SET` nunca falha
 
-**O `WAIT` não impede nada; apenas informa.** Ele esgota o timeout e devolve o número de réplicas que confirmaram — `1` ou `0`. A escrita **já ocorreu** no primário e permanece lá. O `WAIT` não é um mecanismo de consistência: é um mecanismo de *observabilidade* da consistência. Cabe à aplicação decidir o que fazer com um retorno menor que o exigido — e essa decisão não é oferecida pelo banco.
+Olhe a primeira coluna inteira. Mesmo com o primário totalmente isolado, sem **nenhuma** réplica alcançável, a escrita é aceita em 22 ms.
 
-### Um detalhe que engana o operador
+Compare com os outros laboratórios: Cassandra e ScyllaDB, na mesma situação, **recusam** a escrita com erro. O Redis aceita e não avisa.
+
+Essa é a forma mais pura do quadrante **PA** — e a mais perigosa, porque não existe erro para o seu código tratar. A aplicação segue achando que gravou. Se houver failover antes de a réplica se reconectar, o dado simplesmente desaparece.
+
+### O `WAIT` não protege, só informa
+
+Olhe as células de 5098 ms e 5103 ms. O `WAIT` esgotou o timeout de 5 segundos e devolveu `1` ou `0`.
+
+Só que **a escrita já aconteceu**. Ela está no primário. O `WAIT` não desfaz nada, não trava nada, não recusa nada. Ele apenas devolve um número honesto e passa a decisão para você.
+
+Ou seja: o `WAIT` não é um mecanismo de consistência, é um mecanismo de **observabilidade** da consistência. Se o seu código não olha o retorno e não faz nada quando ele vem menor que o pedido, o `WAIT` não está te protegendo de coisa alguma.
+
+### O detalhe que engana o time de operação
 
 Durante toda a partição, o primário continua reportando:
 
@@ -218,43 +261,53 @@ Durante toda a partição, o primário continua reportando:
 connected_slaves:2
 ```
 
-O Redis leva cerca de 60 s (`repl-timeout`) para reclassificar uma réplica particionada. Durante essa janela, **a métrica mente**: um painel de monitoração baseado em `connected_slaves` mostraria saúde plena enquanto as escritas já não estão sendo replicadas. Só o retorno do `WAIT` revela o estado verdadeiro em tempo real.
+O Redis leva cerca de 60 segundos (`repl-timeout`) para reclassificar uma réplica que sumiu. Durante essa janela **a métrica mente**: um painel de monitoração baseado em `connected_slaves` mostra saúde perfeita enquanto as escritas já não estão sendo replicadas.
+
+Só o retorno do `WAIT` mostra a verdade em tempo real.
 
 ---
 
-## Resultados medidos
+## Tempos medidos
 
 | Etapa | Tempo |
 | --- | --- |
-| Bootstrap (`up -d --wait`) | 60 s |
-| T1 — verificação da topologia | 1 s |
+| Subir o cluster | 60 s |
+| T1 — conferir topologia | 1 s |
 | T2 — eixo ELC (controle + caos) | ~10 s |
 | T3 — eixo PAC (3 estados + restauração) | 58 s |
 | **Total** | **~2 min** |
 
 ---
 
-## Erros e armadilhas verificados em execução
+## Se algo der errado
 
-| Sintoma | Causa | Correção |
+| O que você vê | Por que acontece | Como resolver |
 | --- | --- | --- |
-| `WAIT` retorna instantaneamente e o teste "passa" | `SET` e `WAIT` em conexões diferentes | Mesmo fluxo: `printf 'SET..\nWAIT..\n' \| redis-cli` |
-| Medição começa antes de existir replicação | `PING` responde antes da sincronização inicial | Healthcheck em `master_link_status:up` |
-| `connected_slaves:2` durante partição | `repl-timeout` de ~60 s | Confiar no retorno do `WAIT`, não na métrica |
-| `mkdir C:\Program Files\Git\var: Acesso negado` | Git Bash reescreve `/var/run/docker.sock` | Prefixar `MSYS_NO_PATHCONV=1` |
-| Segunda rodada de caos com números estranhos | `netem` não é removido instantaneamente | Aguardar ~30 s entre experimentos |
+| `WAIT` volta na hora e o teste "passa" | `SET` e `WAIT` em conexões diferentes | Mesmo fluxo: `printf 'SET..\nWAIT..\n' \| redis-cli` |
+| Medição começa sem existir replicação | `PING` responde antes da sincronização | Healthcheck em `master_link_status:up` |
+| `connected_slaves:2` durante a partição | `repl-timeout` de ~60 s | Confiar no retorno do `WAIT`, não na métrica |
+| `mkdir C:\Program Files\Git\var: Acesso negado` | Git Bash converte `/var/run/docker.sock` | Prefixar `MSYS_NO_PATHCONV=1` |
+| Segunda rodada de caos com números estranhos | Latência residual do teste anterior | Esperar 30 s antes de continuar |
 
 ---
 
-## Implicações Arquiteturais
+## O que levar disso para o trabalho
 
-Adotar ElastiCache — ou qualquer Redis com replicação assíncrona — é assumir o quadrante **PA/EL** por padrão. O laboratório mostra que esse compromisso não é uma nuance de configuração: é estrutural. O primário aceita escritas em qualquer condição de rede, inclusive isolado de todas as réplicas, e a perda dessas escritas em um failover é uma consequência aritmética disso.
+Usar ElastiCache — ou qualquer Redis com replicação assíncrona — significa aceitar o quadrante **PA/EL** por padrão. E o laboratório mostra que isso não é um detalhe de configuração que você ajusta depois: é estrutural. O primário aceita escritas em qualquer condição de rede, inclusive isolado de tudo. Perder essas escritas num failover é consequência aritmética disso, não um bug.
 
-O `WAIT` oferece uma saída parcial e é importante entender exatamente o quanto ela vale. Ele não torna a escrita transacional nem a desfaz quando o quórum não é atingido — a mutação já está no primário. Ele apenas devolve à aplicação um número honesto, e transfere a ela a responsabilidade de compensar. Para travas distribuídas e barreiras transacionais isso é utilizável, desde que o código trate explicitamente o retorno insuficiente. Onde essa compensação não existir, o `WAIT` cria uma falsa sensação de garantia — que, somada à métrica `connected_slaves` que demora um minuto para dizer a verdade, é uma combinação especialmente traiçoeira em produção.
+O `WAIT` oferece uma saída parcial, e vale entender exatamente o quanto ela vale:
+
+**O que o `WAIT` faz:** devolve um número honesto de quantas réplicas confirmaram.
+
+**O que o `WAIT` não faz:** não torna a escrita transacional, não desfaz nada quando o número vem baixo, não impede a escrita de acontecer.
+
+Para travas distribuídas e barreiras transacionais o `WAIT` é utilizável — desde que o código trate explicitamente o retorno insuficiente. Se você chama `WAIT 2 5000` e ignora o retorno, você não ganhou garantia nenhuma; só adicionou até 5 segundos de latência ao caminho crítico.
+
+Some isso à métrica `connected_slaves`, que demora um minuto para dizer a verdade, e você tem uma combinação especialmente traiçoeira: o painel diz que está tudo bem, o código acha que gravou, e o dado não está em lugar nenhum além de um processo que pode reiniciar.
 
 ---
 
-## Encerramento
+## Encerrar
 
 ```bash
 docker rm -f pumba-redis 2>/dev/null
