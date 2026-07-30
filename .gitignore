@@ -1,0 +1,44 @@
+# ---------------------------------------------------------------------------
+# Definicoes de infraestrutura local
+#
+# Os arquivos de orquestracao e os scripts de apoio NAO sao versionados.
+# O conteudo integro de cada um esta reproduzido no README do respectivo
+# laboratorio: para executar, copie o bloco do README para o arquivo local.
+# ---------------------------------------------------------------------------
+docker-compose.yml
+docker-compose.yaml
+docker-compose.*.yml
+docker-compose.*.yaml
+compose.yml
+compose.yaml
+compose.*.yml
+compose.*.yaml
+
+# Scripts de inicializacao e de medicao
+*.sh
+*.bash
+
+# ---------------------------------------------------------------------------
+# Artefatos de execucao
+# ---------------------------------------------------------------------------
+*.log
+*.tmp
+.env
+.env.*
+!.env.example
+
+# Dados persistidos por volumes montados localmente
+data/
+pgdata/
+volumes/
+
+# ---------------------------------------------------------------------------
+# Sistema operacional e editores
+# ---------------------------------------------------------------------------
+.DS_Store
+Thumbs.db
+desktop.ini
+.vscode/
+.idea/
+*.swp
+*~
