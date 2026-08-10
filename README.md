@@ -1,17 +1,23 @@
-# Laboratórios PACELC — testando na prática como bancos distribuídos se comportam sob falha
+# Laboratórios de bancos distribuídos — o que acontece de verdade quando você grava
 
-Quatro laboratórios em Docker. Em cada um você sobe um banco distribuído, quebra a rede de propósito e mede o que acontece. O objetivo é sair da teoria: em vez de decorar que "Cassandra é AP", você vai ver na tela em que momento exato ele aceita ou recusa uma escrita.
+Oito laboratórios em Docker, divididos em três aulas.
 
-Os dois estresses são sempre os mesmos:
+**AULA01 — comportamento sob falha (PACELC).** Você sobe um banco distribuído, quebra a rede de propósito e mede o que acontece. Em vez de decorar que "Cassandra é AP", você vê na tela em que momento exato ele aceita ou recusa uma escrita. Os dois estresses são sempre os mesmos:
 
 - **Partição de rede** — desconectar nós e ver se o banco continua respondendo (eixo PAC);
 - **Latência injetada** — atrasar a rede em 2 segundos e medir quanto isso custa (eixo ELC).
+
+**AULA02 — como cada modelo de dados grava.** Sem caos e sem cluster: um nó de cada motor, e a pergunta passa a ser o que o banco faz com a escrita que você mandou. Chave-valor, documento e família de colunas tratam a mesma gravação de três formas diferentes — e nas três há um comportamento seguro disponível que **não** é o padrão.
+
+**AULA03 — processar e gravar em escala.** Um notebook PySpark constrói um pipeline inteiro: DataFrame, partições, transformações e escrita em Parquet particionado num S3 local. Aqui o banco sai de cena e entra o motor de processamento — junto com a descoberta de que o Spark não executa o que você escreveu, e sim o plano que ele reescreveu.
 
 Todos os números publicados aqui foram medidos executando os laboratórios. Onde o resultado contrariou o esperado, o texto diz o que aconteceu e por quê.
 
 ---
 
 ## Por onde começar
+
+### AULA01 — o banco sob falha
 
 | # | Laboratório | Emula | Motor | Duração |
 | --- | --- | --- | --- | --- |
@@ -22,17 +28,43 @@ Todos os números publicados aqui foram medidos executando os laboratórios. Ond
 
 **Siga essa ordem.** Ela vai do caso mais simples de entender (uma réplica síncrona, uma assíncrona — o comportamento é óbvio depois que você vê) até o mais sutil (quóruns e níveis de consistência que se sobrepõem). Os laboratórios 3 e 4 fazem referência aos anteriores.
 
-**Rode um de cada vez.** Cada laboratório sobe 3 ou 4 contêineres, e Cassandra e ScyllaDB consomem bastante memória. Antes de passar para o próximo, encerre o atual:
+### AULA02 — o banco recebendo a sua escrita
+
+| # | Laboratório | Modelo | Motor | Duração |
+| --- | --- | --- | --- | --- |
+| 5 | [Chave-valor / Redis](AULA02/KeyValue/README.md) | chave-valor | Redis 7.0 | **~3 min** |
+| 6 | [Documento / MongoDB](AULA02/Document/README.md) | documento | MongoDB 7.0 | **~4 min** |
+| 7 | [Família de colunas / Cassandra](AULA02/Collumn/README.md) | família de colunas | Cassandra 4.1 | **~5 min** |
+
+Aqui a ordem também importa, e por um motivo diferente: ela vai do modelo que **menos** promete ao que mais parece um banco relacional sem ser um. Cada laboratório se apoia no anterior para mostrar o que mudou.
+
+A AULA02 não depende da AULA01 — dá para começar por ela. Mas o Laboratório 5 fecha um argumento que o Laboratório 2 abriu, e o 7 usa o 3 como contraste.
+
+### AULA03 — processar e gravar em escala
+
+| # | Laboratório | Interface | Motor | Duração |
+| --- | --- | --- | --- | --- |
+| 8 | [Spark: do DataFrame ao S3](AULA03/SPARK/README.md) | notebook no VS Code | PySpark 3.5.3 local + floci (S3) | **~5 min** |
+
+É o único laboratório que se usa dentro de um editor, e o único que traz um arquivo pronto no clone: o notebook `aula03-spark.ipynb`. Também é o único em que o Docker não hospeda o que você está estudando — o Spark roda no seu Python, e o contêiner existe só para dar um S3 de verdade.
+
+### Em qualquer uma das três
+
+**Rode um laboratório de cada vez.** Antes de passar para o próximo, encerre o atual:
 
 ```bash
 docker compose down -v
 ```
 
-Executar os quatro leva **cerca de 20 minutos**, dos quais uns 11 são só esperando cluster subir. Se você tem uma janela curta, faça o 1 e o 2 (5 minutos somados) — eles já mostram os dois eixos.
+A AULA01 leva **cerca de 20 minutos**, dos quais uns 11 são só esperando cluster subir. Se você tem uma janela curta, faça o 1 e o 2 (5 minutos somados) — eles já mostram os dois eixos.
+
+A AULA02 leva **cerca de 12 minutos**, e sobe um contêiner por vez. Some o download das imagens na primeira execução (MongoDB ~250 MB, Cassandra ~370 MB).
+
+A AULA03 leva **cerca de 5 minutos**, dos quais 2 são preparo único do ambiente local (um venv com PySpark e 275 MB de bibliotecas de S3). Depois disso, só o notebook: ~2,5 min.
 
 ---
 
-## O que cada teste faz
+## O que cada teste faz — AULA01
 
 Cada teste tem um identificador (T1, T2...) usado no README do laboratório.
 
@@ -85,7 +117,7 @@ Três nós ScyllaDB expondo a API do DynamoDB. Você usa o `aws` CLI normalmente
 
 ---
 
-## O que os quatro, juntos, mostram
+## O que os quatro, juntos, mostram — AULA01
 
 Rodando um por um, cada laboratório parece só confirmar um rótulo conhecido. Colocando lado a lado aparece algo mais útil: **os quatro sistemas colocam a decisão em lugares diferentes**.
 
@@ -132,15 +164,132 @@ A conclusão prática: **o custo da consistência só aparece quando a infraestr
 
 ---
 
+## O que cada laboratório faz — AULA02
+
+Aqui não há caos injetado. Cada laboratório é uma sequência de passos numerados, e a rede fica intacta o tempo todo.
+
+### 5. Chave-valor / Redis — [abrir](AULA02/KeyValue/README.md)
+
+Um nó. Você grava nas cinco estruturas do Redis e depois mata o processo de duas formas diferentes.
+
+| Passo | O que faz | Duração | O que você vai ver |
+| --- | --- | --- | --- |
+| — | Sobe o nó | 9 s | `PONG`, `save 3600 1 ...`, `appendonly no` |
+| 3 | Grava em string, hash, lista, conjunto e conjunto ordenado | 8 s | `SADD` com 3 valores retorna **`2`** |
+| 4 | `DECRBY`, `INCR` e `SET NX` — gravar sem ler antes | 6 s | segundo `SET NX` volta **vazio**, não erro |
+| 5 | `MULTI/EXEC` com erro de tipo e com erro de sintaxe | 5 s | um aborta tudo, o outro **grava metade** |
+| 6 | `restart` vs. `kill` vs. `SAVE` + `kill` | 45 s | escrita confirmada **some**, e `DBSIZE` volta 1 |
+
+### 6. Documento / MongoDB — [abrir](AULA02/Document/README.md)
+
+Um nó. Inserção, atualização, upsert, lote e o custo de cada nível de confirmação.
+
+| Passo | O que faz | Duração | O que você vai ver |
+| --- | --- | --- | --- |
+| — | Sobe o nó | 11 s | `7.0.39` (75 s na primeira vez, com download) |
+| 3 | Grava sem criar banco nem coleção | 8 s | `loja` passa a existir; `total` texto e número convivem |
+| 4 | `updateOne` com `$set`, sem operador, e `replaceOne` | 7 s | `replaceOne` **apaga campos** com o mesmo retorno |
+| 5 | Upsert duas vezes | 3 s | `upsertedCount: 1`, depois `modifiedCount: 0` |
+| 6 | Índice `unique` e `insertMany` ordenado vs. não ordenado | 9 s | mesmo `E11000`, **estados finais diferentes** |
+| 7 | Mede `w:0`, `w:1` e `w:1, j:true` | ~6 s | 0,79 / 1,23 / **3,35 ms** por escrita |
+| 8 | Tenta uma transação | 2 s | recusada — nó único não tem oplog |
+
+### 7. Família de colunas / Cassandra — [abrir](AULA02/Collumn/README.md)
+
+Um nó, RF=1. Chave de partição, chave de agrupamento, e a gravação que sobrescreve sem avisar.
+
+| Passo | O que faz | Duração | O que você vai ver |
+| --- | --- | --- | --- |
+| — | Sobe o nó | 74 s | 1 nó `UN` |
+| 3 | Declara `PRIMARY KEY ((cliente), criado_em, pedido_id)` | 4 s | a consulta define a tabela, não o contrário |
+| 4 | `INSERT` duas vezes na mesma chave; `UPDATE` em linha inexistente | 6 s | **sobrescreve em silêncio**; `UPDATE` cria a linha |
+| 5 | `IF NOT EXISTS` e quanto ele custa | ~25 s | `[applied] False`; **~2,2×** mais caro |
+| 6 | `USING TTL` e colunas `counter` | 35 s | a linha some sozinha; contador **não é idempotente** |
+| 7 | `BATCH` normal, com contador e com condição | 6 s | condição em duas partições é **recusada** |
+| 8 | `DELETE` de algo que nunca existiu | 3 s | aceito — e grava um marcador por 10 dias |
+
+---
+
+## O que os três, juntos, mostram — AULA02
+
+A AULA01 comparou os bancos por como eles falham. A AULA02 os compara por uma pergunta mais banal, que aparece em qualquer sistema com uma fila que reentrega mensagem: **o que acontece se a mesma gravação chegar duas vezes?**
+
+| Motor | Gravar duas vezes na mesma chave | Como obter o comportamento seguro | O que ele custa |
+| --- | --- | --- | --- |
+| Redis | sobrescreve | `SET ... NX` | nada |
+| MongoDB | cria **dois** documentos | índice `unique` → `E11000` | um índice |
+| Cassandra | **sobrescreve em silêncio** | `INSERT ... IF NOT EXISTS` | **~2,2×** por escrita |
+
+As três colunas da direita têm algo em comum: **nenhuma delas é o padrão.** Em qualquer um dos três motores, o código que não pede nada de especial aceita a repetição sem reclamar — e cada um perde uma coisa diferente. O Redis perde a gravação anterior, o MongoDB duplica, o Cassandra apaga o pedido original sem deixar rastro.
+
+### Confirmado não quer dizer gravado
+
+Os três confirmam a escrita antes de ela estar segura em disco, e cada um oferece uma saída diferente:
+
+| Motor | O padrão confirma quando | Como exigir o disco | Custo medido |
+| --- | --- | --- | --- |
+| Redis | o dado está em memória | `--appendonly yes` | não medido aqui |
+| MongoDB | o servidor aplicou (`w: 1`) | `w: 1, j: true` | 1,23 → **3,35 ms** (~2,6×) |
+| Cassandra | o commit log recebeu | já é o padrão | — |
+
+O Laboratório 5 mostra a versão mais crua disso: uma escrita que respondeu `OK` desaparece num `docker kill`, e o banco volta com um estado antigo e perfeitamente plausível — sem erro, sem arquivo corrompido, sem alerta.
+
+### O contrato não sumiu, mudou de lugar
+
+É a diferença que mais confunde quem chega do relacional. Nenhum dos três tem `CREATE TABLE` fazendo o trabalho todo:
+
+| Motor | Onde o contrato mora | O que acontece se ninguém escrever |
+| --- | --- | --- |
+| Redis | na estrutura escolhida (`SADD` deduplica, `INCR` só soma) | o retorno avisa — se alguém ler |
+| MongoDB | em índices e validadores, criados à parte | nada é recusado |
+| Cassandra | na `PRIMARY KEY`, que decide **onde** o dado mora | duplicata vira sobrescrita |
+
+Nos três, quem não escreve o contrato não fica sem contrato: fica com o contrato implícito do motor, que é sempre o mais permissivo.
+
+---
+
+## O que o laboratório faz — AULA03
+
+### 8. Spark: do DataFrame ao S3 — [abrir](AULA03/SPARK/README.md)
+
+Um notebook rodando no VS Code com PySpark em `local[4]`, gravando num S3 local (floci). Cada seção é uma etapa do pipeline.
+
+| Seção | O que faz | O que você vai ver |
+| --- | --- | --- |
+| — | Sobe o floci | 5 s |
+| 3 | Cria DataFrame com schema explícito | tipos declarados, não adivinhados |
+| 5 | `repartition`, `coalesce`, `repartition("col")` | uma partição com **o dobro** das outras |
+| 6 | `select`, `filter`, `when`, `groupBy`, `join`, `Window` | as funções do dia a dia, com saída real |
+| 7 | UDF Python vs. função nativa | medição falsa (UDF "ganha"), depois **3,2×** |
+| 8 | `write.partitionBy("uf")` no S3 | **24 arquivos** — e 6 com uma linha a mais |
+| 9 | Leitura com filtro de partição | 947 ms → **277 ms** |
+
+### O que ele acrescenta às duas primeiras aulas
+
+A AULA01 e a AULA02 tratam do banco recebendo uma escrita por vez. A AULA03 troca a unidade: aqui a escrita é um conjunto de arquivos, e o que decide o desempenho não é o motor — é como você dividiu o trabalho.
+
+**Duas perguntas passam a valer mais que as configurações:**
+
+| Pergunta | O que ela governa | Errar custa |
+| --- | --- | --- |
+| Quantas tarefas em paralelo? | `repartition(n)` | *skew* — uma tarefa segura o job inteiro |
+| Por qual coluna vou filtrar? | `partitionBy("col")` | milhares de arquivos pequenos |
+
+São perguntas diferentes, e o laboratório mostra o que acontece ao responder uma com a outra.
+
+E há um fio que liga as três aulas. Na AULA01, o banco aceitava escrita sem réplica alcançável; na AULA02, aceitava sem nada em disco; aqui, o Spark aceita uma medição que não mediu nada. **Nos três casos o sistema devolve um resultado plausível, e a única defesa é conferir o que ele de fato fez** — o retorno do `WAIT`, o `DBSIZE` depois da queda, o plano do `explain()`.
+
+---
+
 ## Antes de começar
 
 | O que você precisa | Versão testada |
 | --- | --- |
 | Docker Engine | 28.4.0 |
 | Docker Compose | v2.39.2 |
-| Pumba (injeta a latência) | `gaiaadm/pumba` — é uma imagem, não precisa instalar |
+| Pumba (injeta a latência) | `gaiaadm/pumba` — é uma imagem, não precisa instalar; só a AULA01 usa |
 
-Não instale mais nada. Os clientes de linha de comando (`aws`, `cqlsh`, `redis-cli`, `psql`) rodam dentro dos contêineres.
+Não instale mais nada. Os clientes de linha de comando (`aws`, `cqlsh`, `redis-cli`, `psql`, `mongosh`) rodam dentro dos contêineres.
 
 ### Os arquivos de configuração não vêm no clone
 
@@ -168,19 +317,39 @@ A correção é colocar `MSYS_NO_PATHCONV=1` na frente de todo comando `docker` 
 MSYS_NO_PATHCONV=1 docker run -d --rm -v /var/run/docker.sock:/var/run/docker.sock gaiaadm/pumba ...
 ```
 
-No PowerShell, WSL, Linux e macOS não precisa desse prefixo. Os comandos nos READMEs já vêm com ele — se você não usa Git Bash, pode ignorar.
+**Isso não vale só para o Pumba.** Rodar um script dentro do contêiner esbarra no mesmo problema, e o erro engana porque parece que o arquivo não foi copiado:
+
+```
+bash: C:/Users/.../AppData/Local/Temp/cass-write.sh: No such file or directory
+```
+
+```bash
+MSYS_NO_PATHCONV=1 docker exec cassandra-lab bash /tmp/cass-write.sh
+```
+
+O arquivo está lá dentro do contêiner; quem se perdeu foi o caminho. No PowerShell, WSL, Linux e macOS não precisa desse prefixo. Os comandos nos READMEs já vêm com ele — se você não usa Git Bash, pode ignorar.
 
 ---
 
-## Três regras que valem para os quatro laboratórios
+## Três regras que valem para todos os laboratórios
 
 Não são preferências de estilo. Cada uma corrige um erro que aconteceu de verdade durante a validação.
 
 ### 1. Você pode rodar tudo de novo sem dar erro
 
-Todos os comandos são idempotentes: dá para repetir a sequência inteira quantas vezes quiser. Isso exige proteção em dois lugares.
+Todos os comandos são idempotentes: dá para repetir a sequência inteira quantas vezes quiser. Isso exige proteção em três lugares.
 
 Ao criar schema, use `IF NOT EXISTS` (ou teste antes de criar) — senão a segunda execução falha com "já existe".
+
+Ao gravar dado de exemplo, comece limpando. Sem isso a segunda execução não dá erro, mas produz números diferentes dos publicados — o que é pior, porque parece que o laboratório falhou. Cada motor tem seu comando:
+
+```bash
+docker exec redis-lab     redis-cli FLUSHALL                                  # Laboratório 5
+docker exec mongo-lab     mongosh --quiet loja --eval 'db.dropDatabase()'     # Laboratório 6
+docker exec cassandra-lab cqlsh -e "TRUNCATE loja.pedidos_por_cliente;"       # Laboratório 7
+```
+
+No Laboratório 8 isso já está embutido: as escritas usam `mode("overwrite")` e a criação do bucket trata o `409 Conflict` como sucesso. O notebook foi executado duas vezes seguidas com `jupyter nbconvert --execute` para confirmar.
 
 Ao mexer na rede, use as funções abaixo. Sem o `2>/dev/null`, desconectar um nó já desconectado dá erro e o script para:
 
@@ -197,6 +366,8 @@ net_in()  { docker network connect    <rede> "$1" 2>/dev/null; }
 - No PostgreSQL, as sessões de cópia inicial (`pg_basebackup`) aparecem como se fossem réplicas, antes de existir replicação.
 
 Se você começar a medir nesse momento, os números não querem dizer nada. Cada README traz o comando de espera correto para o seu motor — use antes de seguir.
+
+Nos laboratórios de nó único da AULA02 o `--wait` **é** suficiente, mas só porque os healthchecks foram escritos para isso: o do MongoDB grava um documento em vez de dar `ping`, e o do Cassandra exige `cqlsh` respondendo, não apenas `nodetool status`. Um healthcheck que só testa o processo devolve o controle antes de o banco aceitar escrita.
 
 ### 3. Espere 30 segundos entre um teste de caos e o próximo
 
@@ -217,12 +388,13 @@ Isso derruba muita medição. Os clientes de linha de comando demoram para inici
 
 | Cliente | Custo só para iniciar |
 | --- | --- |
+| `mongosh` (Node.js) via `docker exec` | ~1200 ms |
 | `aws` (AWS CLI v2, escrito em Python) | ~1001 ms |
-| `cqlsh` (Python) | ~800 ms |
+| `cqlsh` (Python) | ~700 – 800 ms |
 | `psql` via `docker exec` | ~500 ms |
 | `redis-cli` (C) | desprezível |
 
-Ou seja: rodar `time aws dynamodb get-item` mede principalmente o tempo de subir o interpretador Python, não o banco. A operação real leva ~12 ms.
+Ou seja: rodar `time aws dynamodb get-item` mede principalmente o tempo de subir o interpretador Python, não o banco. A operação real leva ~12 ms. No `mongosh` a distorção é ainda maior: ~1200 ms de startup para uma escrita de ~1,2 ms — **mil vezes** o que se pretendia medir.
 
 Os laboratórios contornam isso de duas formas, ambas explicadas nos READMEs:
 
@@ -231,11 +403,25 @@ Os laboratórios contornam isso de duas formas, ambas explicadas nos READMEs:
 
 Se você adaptar os testes, mantenha uma das duas. Medição de latência com cliente pesado por chamada não serve para comparar nada.
 
+### Uma rodada só não é uma medição
+
+Amortizar o startup resolve metade do problema. A outra metade apareceu no Laboratório 6: medindo os três níveis de `writeConcern` **uma vez cada**, uma pausa de ~7 s caiu dentro da janela de um deles e o transformou no mais lento — em execuções diferentes, num nível diferente. A conclusão se invertia conforme a rodada.
+
+A correção é intercalar as rodadas e ficar com a mediana. O sinal só é confiável quando as rodadas de um nível **não se sobrepõem** às do outro:
+
+```
+w:0          rodadas=[114, 79, 79, 75, 70]      mediana=79 ms
+w:1 j:false  rodadas=[181, 146, 123, 114, 117]  mediana=123 ms
+w:1 j:true   rodadas=[366, 362, 335, 279, 322]  mediana=335 ms
+```
+
+Publicar a lista de rodadas junto com a mediana não é excesso de zelo: é o que permite a quem lê distinguir um resultado de um acaso.
+
 ---
 
 ## Ao terminar
 
-Encerre o laboratório e remova o injetor de caos:
+Encerre o laboratório e, se for da AULA01, remova o injetor de caos:
 
 ```bash
 docker rm -f $(docker ps -aq --filter name=pumba) 2>/dev/null
@@ -246,7 +432,8 @@ Para conferir que não ficou nada rodando antes de começar o próximo:
 
 ```bash
 docker ps --format "{{.Names}}"
-docker network ls --filter name=pacelc
+docker network ls --filter name=pacelc --format "{{.Name}}"
+docker network ls --filter name=aula0 --format "{{.Name}}"
 ```
 
-As duas listas devem sair vazias.
+As três listas devem sair vazias. As redes da AULA01 são prefixadas `pacelc-`; as da AULA02 e da AULA03, `aula02-` e `aula03-`.

@@ -42,3 +42,8 @@ desktop.ini
 .idea/
 *.swp
 *~
+
+# Ambiente local do laboratorio de Spark (AULA03)
+.venv/
+jars/
+hadoop/
