@@ -42,8 +42,22 @@ desktop.ini
 .idea/
 *.swp
 *~
+__pycache__/
+*.pyc
 
-# Ambiente local do laboratorio de Spark (AULA03)
+# Ambiente local do laboratorio de Spark (AULA03): venv, jars e winutils
 .venv/
 jars/
 hadoop/
+jdk/
+
+# Wiring de infra gerado pelo setup.sh (conteudo reproduzido no README)
+configuracao_local.py
+
+# Artefatos gravados pelos scripts da AULA03
+vendas_brutas.csv/
+saida_vendas_parquet/
+
+# Artefatos gravados pelos scripts da AULA03/PYSPARK-BASICO
+AULA03/PYSPARK-BASICO/dados/
+AULA03/PYSPARK-BASICO/saida/

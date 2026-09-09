@@ -9,7 +9,7 @@ Oito laboratórios em Docker, divididos em três aulas.
 
 **AULA02 — como cada modelo de dados grava.** Sem caos e sem cluster: um nó de cada motor, e a pergunta passa a ser o que o banco faz com a escrita que você mandou. Chave-valor, documento e família de colunas tratam a mesma gravação de três formas diferentes — e nas três há um comportamento seguro disponível que **não** é o padrão.
 
-**AULA03 — processar e gravar em escala.** Um notebook PySpark constrói um pipeline inteiro: DataFrame, partições, transformações e escrita em Parquet particionado num S3 local. Aqui o banco sai de cena e entra o motor de processamento — junto com a descoberta de que o Spark não executa o que você escreveu, e sim o plano que ele reescreveu.
+**AULA03 — processar e gravar em escala.** Três scripts PySpark constroem um pipeline inteiro na sua própria máquina: criação do DataFrame, partições, as transformações do dia a dia e um ETL que valida, rejeita com motivo e grava Parquet particionado em disco. Aqui o banco sai de cena e entra o motor de processamento — junto com duas descobertas: o Spark não executa o que você escreveu, e sim o plano que ele reescreveu; e uma linha pode sumir de um pipeline inteiro por causa de um `NULL` numa condição de validação.
 
 Todos os números publicados aqui foram medidos executando os laboratórios. Onde o resultado contrariou o esperado, o texto diz o que aconteceu e por quê.
 
@@ -44,9 +44,11 @@ A AULA02 não depende da AULA01 — dá para começar por ela. Mas o Laboratóri
 
 | # | Laboratório | Interface | Motor | Duração |
 | --- | --- | --- | --- | --- |
-| 8 | [Spark: do DataFrame ao S3](AULA03/SPARK/README.md) | notebook no VS Code | PySpark 3.5.3 local + floci (S3) | **~5 min** |
+| 8 | [PySpark do zero: DataFrame, funcionalidades e ETL local](AULA03/PYSPARK-BASICO/README.md) | quatro scripts `.py` no terminal | PySpark 3.5.3 local, sem Docker | **~10 min** |
 
-É o único laboratório que se usa dentro de um editor, e o único que traz um arquivo pronto no clone: o notebook `aula03-spark.ipynb`. Também é o único em que o Docker não hospeda o que você está estudando — o Spark roda no seu Python, e o contêiner existe só para dar um S3 de verdade.
+É o único laboratório **sem Docker**: o Spark roda no seu próprio Python, e a saída vai para uma pasta no seu disco. Também é o único que traz arquivos prontos no clone — os quatro scripts e o módulo de configuração — porque aqui o que se estuda é o código, não a infraestrutura.
+
+É escrito para quem **nunca abriu o Spark**: começa por um script de vinte linhas comentadas uma a uma, tem glossário, uma seção sobre como ler um traceback de PySpark e [12 exercícios com gabarito](AULA03/PYSPARK-BASICO/EXERCICIOS.md).
 
 ### Em qualquer uma das três
 
@@ -60,7 +62,7 @@ A AULA01 leva **cerca de 20 minutos**, dos quais uns 11 são só esperando clust
 
 A AULA02 leva **cerca de 12 minutos**, e sobe um contêiner por vez. Some o download das imagens na primeira execução (MongoDB ~250 MB, Cassandra ~370 MB).
 
-A AULA03 leva **cerca de 5 minutos**, dos quais 2 são preparo único do ambiente local (um venv com PySpark e 275 MB de bibliotecas de S3). Depois disso, só o notebook: ~2,5 min.
+A AULA03 leva **cerca de 10 minutos**, dos quais 2 são preparo único do ambiente local (um venv com PySpark). Depois disso, só rodar os quatro scripts: 41 s, 55 s, 99 s e 27 s. Os exercícios são à parte, e rendem mais uma hora.
 
 ---
 
@@ -250,19 +252,16 @@ Nos três, quem não escreve o contrato não fica sem contrato: fica com o contr
 
 ## O que o laboratório faz — AULA03
 
-### 8. Spark: do DataFrame ao S3 — [abrir](AULA03/SPARK/README.md)
+### 8. PySpark do zero: DataFrame, funcionalidades e ETL local — [abrir](AULA03/PYSPARK-BASICO/README.md)
 
-Um notebook rodando no VS Code com PySpark em `local[4]`, gravando num S3 local (floci). Cada seção é uma etapa do pipeline.
+Três scripts Python rodando com PySpark em `local[4]`, na sua máquina, sem contêiner nenhum. Cada um responde a uma pergunta diferente.
 
-| Seção | O que faz | O que você vai ver |
+| Script | O que faz | O que você vai ver |
 | --- | --- | --- |
-| — | Sobe o floci | 5 s |
-| 3 | Cria DataFrame com schema explícito | tipos declarados, não adivinhados |
-| 5 | `repartition`, `coalesce`, `repartition("col")` | uma partição com **o dobro** das outras |
-| 6 | `select`, `filter`, `when`, `groupBy`, `join`, `Window` | as funções do dia a dia, com saída real |
-| 7 | UDF Python vs. função nativa | medição falsa (UDF "ganha"), depois **3,2×** |
-| 8 | `write.partitionBy("uf")` no S3 | **24 arquivos** — e 6 com uma linha a mais |
-| 9 | Leitura com filtro de partição | 947 ms → **277 ms** |
+| `00_primeiro_contato.py` | o menor programa PySpark possível, linha por linha | sessão, DataFrame, transformação, ação |
+| `01_dataframe.py` | seis formas de criar um DataFrame, inspeção, transformação × ação | o `filter` não dispara nada; o `collect` dispara |
+| `02_funcionalidades.py` | select, filter, nulos, `groupBy`, join, `Window`, SQL, partição, UDF | UDF **13×** mais lenta — e uma medição em que ela não roda |
+| `03_etl_local.py` | ETL completo: CSV bruto → validação → Parquet particionado | 48 508 aprovadas, 1 492 rejeitadas **com o motivo de cada uma** |
 
 ### O que ele acrescenta às duas primeiras aulas
 
@@ -275,9 +274,9 @@ A AULA01 e a AULA02 tratam do banco recebendo uma escrita por vez. A AULA03 troc
 | Quantas tarefas em paralelo? | `repartition(n)` | *skew* — uma tarefa segura o job inteiro |
 | Por qual coluna vou filtrar? | `partitionBy("col")` | milhares de arquivos pequenos |
 
-São perguntas diferentes, e o laboratório mostra o que acontece ao responder uma com a outra.
+São perguntas diferentes, e o laboratório mostra, medindo, o que acontece ao responder uma com a outra: a mesma tabela sai com **24 arquivos** ou com **6**, dependendo de uma única linha antes do `write`.
 
-E há um fio que liga as três aulas. Na AULA01, o banco aceitava escrita sem réplica alcançável; na AULA02, aceitava sem nada em disco; aqui, o Spark aceita uma medição que não mediu nada. **Nos três casos o sistema devolve um resultado plausível, e a única defesa é conferir o que ele de fato fez** — o retorno do `WAIT`, o `DBSIZE` depois da queda, o plano do `explain()`.
+E há um fio que liga as três aulas. Na AULA01, o banco aceitava escrita sem réplica alcançável; na AULA02, aceitava sem nada em disco; aqui, o Spark aceita uma medição que não mediu nada — e um filtro de validação deixa 505 linhas evaporarem sem erro nenhum. **Nos três casos o sistema devolve um resultado plausível, e a única defesa é conferir o que ele de fato fez** — o retorno do `WAIT`, o `DBSIZE` depois da queda, o plano do `explain()`, a conta de entradas e saídas do ETL.
 
 ---
 
@@ -349,7 +348,7 @@ docker exec mongo-lab     mongosh --quiet loja --eval 'db.dropDatabase()'     # 
 docker exec cassandra-lab cqlsh -e "TRUNCATE loja.pedidos_por_cliente;"       # Laboratório 7
 ```
 
-No Laboratório 8 isso já está embutido: as escritas usam `mode("overwrite")` e a criação do bucket trata o `409 Conflict` como sucesso. O notebook foi executado duas vezes seguidas com `jupyter nbconvert --execute` para confirmar.
+No Laboratório 8 isso já está embutido: as escritas usam `mode("overwrite")`, a entrada é gerada com semente fixa e só na primeira execução. Os três scripts foram executados duas vezes seguidas, e a saída do ETL saiu idêntica nas duas.
 
 Ao mexer na rede, use as funções abaixo. Sem o `2>/dev/null`, desconectar um nó já desconectado dá erro e o script para:
 
