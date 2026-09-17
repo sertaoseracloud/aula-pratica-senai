@@ -1,20 +1,22 @@
-"""ETL completo -- temperaturas de um trimestre em dez cidades de SC, lidas e
-gravadas no Azure Blob Storage.
+"""Exercicio de ETL -- temperaturas de um trimestre em dez cidades de SC,
+lidas e gravadas no Azure Blob Storage.
 
     python 01_etl_temperaturas_sc.py
 
-Este e o `03_etl_local.py` da AULA03 com uma diferenca: a entrada nao esta
-no seu disco, esta num container de Blob Storage, e a saida volta pra la
-depois de processada. As cinco etapas continuam as mesmas -- Extract,
-Transform, Load -- só que Extract e Load agora cruzam a rede (aqui, o
-floci-az local; em produção, o Azure de verdade, trocando só a connection
-string).
+Este arquivo E o exercicio: ele te da a Fonte (gerador do CSV e do envio ao
+Blob), o Extract, o Load e a Verificacao prontos, mas deixa quatro blocos de
+Transform com `# TODO Exercicio N` no lugar do codigo. Leia o enunciado de
+cada um no EXERCICIOS_AZURE.md, escreva a linha que falta e rode de novo.
 
-O padrao usado aqui -- baixar do Blob, processar local, subir o resultado
-de volta -- e o mesmo que um job Spark de no unico (sem cluster distribuido)
-usa na pratica: o `local[4]` deste laboratorio nao enxerga o Blob como um
-sistema de arquivos particionavel, entao ele baixa o objeto inteiro, como
-qualquer outro programa faria.
+Enquanto um TODO nao for preenchido, a funcao devolve `None` e o script para
+com um erro claro (`AttributeError: 'NoneType' object has no attribute ...`)
+apontando exatamente qual bloco falta -- o mesmo mecanismo do exercicio de
+ETL da AULA03 (`05_etl_enem_sc.py`).
+
+O padrao geral -- baixar do Blob, processar local, subir o resultado de
+volta -- ja esta pronto nas etapas de Extract e Load. O que falta escrever
+e a parte que nao muda de nuvem para nuvem: normalizar, validar, enriquecer
+e resumir um DataFrame comum.
 
     dados/temperaturas_sc.csv                entrada local (gerada e enviada uma vez)
     dados/municipios_sc.csv                  tabela de apoio (municipio -> regiao)
@@ -81,7 +83,7 @@ SCHEMA_TEMPERATURAS = StructType(
 
 
 # ---------------------------------------------------------------------------
-# Fonte -- gera os dois CSVs localmente, uma unica vez
+# Fonte -- dado, sem exercicio: gera os dois CSVs localmente e semeia o Blob
 # ---------------------------------------------------------------------------
 def gerar_csv_temperaturas() -> None:
     if ARQUIVO_TEMPERATURAS.exists():
@@ -175,7 +177,7 @@ def semear_blob(container) -> None:
 
 
 # ---------------------------------------------------------------------------
-# E de Extract -- baixar do Blob, so entao ler com o Spark
+# E de Extract -- dado, sem exercicio: baixar do Blob, so entao ler com o Spark
 # ---------------------------------------------------------------------------
 def extrair(spark: SparkSession, container) -> tuple[DataFrame, DataFrame]:
     # O Spark local nao fala com o Blob Storage diretamente -- ele le do
@@ -203,76 +205,111 @@ def extrair(spark: SparkSession, container) -> tuple[DataFrame, DataFrame]:
 
 
 # ---------------------------------------------------------------------------
-# T de Transform -- identico em espirito ao 03_etl_local.py
+# T de Transform -- quatro blocos, quatro exercicios
 # ---------------------------------------------------------------------------
-def transformar(
-    bruto: DataFrame, municipios: DataFrame
-) -> tuple[DataFrame, DataFrame, DataFrame, DataFrame]:
-    normalizado = (
-        bruto
-        .withColumn("municipio", F.upper(F.trim(F.col("municipio"))))
-        .withColumn("data", F.to_date("data", "yyyy-MM-dd"))
-        .dropDuplicates(["estacao_id", "data", "municipio"])
-    )
+def normalizar(bruto: DataFrame) -> DataFrame:
+    """Exercicio 1 -- padronizar municipio, converter a data e tirar duplicatas.
 
+    Tres coisas, nesta ordem:
+    1. `municipio` para maiusculo e sem espaco nas pontas (F.upper(F.trim(...))
+       -- mesmo padrao do exercicio de ENEM da AULA03).
+    2. `data` de string para date, com F.to_date("data", "yyyy-MM-dd").
+    3. dropDuplicates em ["estacao_id", "data", "municipio"] -- identifica
+       uma leitura unica.
+
+    Resposta esperada: 920 linhas (4 duplicatas removidas de 924 lidas).
+    """
+    # TODO Exercicio 1: normalizar municipio, converter a data e remover duplicatas.
+    return None
+
+
+def validar(normalizado: DataFrame) -> tuple[DataFrame, DataFrame]:
+    """Exercicio 2 -- separar leituras validas de invalidas, com o motivo.
+
+    Uma leitura e valida quando, ao mesmo tempo:
+    - `municipio` esta em NOMES_MUNICIPIOS (compare em maiusculo);
+    - `temperatura_min` <= `temperatura_max`;
+    - `temperatura_min` e `temperatura_max` estao dentro de [-15, 50];
+    - `umidade_pct` esta dentro de [0, 100].
+
+    Junte as quatro condicoes com `&` dentro de um F.coalesce(..., F.lit(False))
+    -- exatamente como a `regra_valida` do 03_etl_local.py da AULA03. Sem o
+    coalesce, uma condicao que vira NULL faz a linha inteira sumir dos dois
+    lados (aprovadas e rejeitadas) sem que a conciliacao note.
+
+    Monte a coluna `motivo` nos rejeitados com uma cadeia de F.when, nesta
+    ordem de prioridade: municipio invalido, depois min > max, depois fora
+    da faixa fisica, e o que sobrar (`.otherwise(...)`) e umidade invalida.
+    Duas condicoes podem bater na mesma linha ao mesmo tempo -- a ordem
+    decide qual motivo fica registrado.
+
+    Resposta esperada: 886 aprovadas, 34 rejeitadas.
+
+        temperatura_min maior que temperatura_max      11
+        municipio invalida ou ausente                   8
+        umidade fora da faixa (0 a 100)                 8
+        temperatura fora da faixa fisica (-15 a 50)     7
+    """
     nomes_validos = [m.upper() for m in NOMES_MUNICIPIOS]
 
-    # F.coalesce(..., F.lit(False)): sem ele, uma linha com `municipio` nulo
-    # faria `isin(...)` avaliar para NULL, e `~NULL` tambem e NULL -- a linha
-    # sumiria dos dois lados (aprovados e rejeitados) sem que a conciliacao
-    # notasse, ate voce somar os dois totais e sobrar uma diferenca muda.
-    regra_valida = F.coalesce(
-        F.col("municipio").isin(nomes_validos)
-        & (F.col("temperatura_min") <= F.col("temperatura_max"))
-        & F.col("temperatura_min").between(-15, 50)
-        & F.col("temperatura_max").between(-15, 50)
-        & F.col("umidade_pct").between(0, 100),
-        F.lit(False),
-    )
+    # TODO Exercicio 2: regra_valida = F.coalesce(..., F.lit(False))
+    regra_valida = None
 
     rejeitadas = normalizado.filter(~regra_valida).withColumn(
         "motivo",
-        F.when(~F.col("municipio").isin(nomes_validos), "municipio invalida ou ausente")
-         .when(F.col("temperatura_min") > F.col("temperatura_max"), "temperatura_min maior que temperatura_max")
-         .when(
-             ~F.col("temperatura_min").between(-15, 50) | ~F.col("temperatura_max").between(-15, 50),
-             "temperatura fora da faixa fisica (-15 a 50)",
-         )
-         .otherwise("umidade fora da faixa (0 a 100)"),
+        F.lit(None).cast("string"),  # TODO Exercicio 2: cadeia de F.when(...).otherwise(...)
     )
+    aprovadas = normalizado.filter(regra_valida)
+    return aprovadas, rejeitadas
 
-    limpo = (
-        normalizado.filter(regra_valida)
-        .withColumn("amplitude_termica", F.round(F.col("temperatura_max") - F.col("temperatura_min"), 1))
-        .withColumn(
-            "faixa_dia",
-            F.when(F.col("temperatura_media") < 15, "fria")
-             .when(F.col("temperatura_media") <= 22, "amena")
-             .otherwise("quente"),
-        )
-        .join(municipios, on="municipio", how="left")
-        .select(
-            "estacao_id", "data", "municipio", "regiao",
-            "temperatura_min", "temperatura_max", "temperatura_media",
-            "amplitude_termica", "umidade_pct", "faixa_dia",
-        )
-    )
 
-    resumo_regiao = (
-        limpo.groupBy("regiao")
-        .agg(
-            F.count("*").alias("leituras"),
-            F.round(F.avg("temperatura_media"), 2).alias("media_trimestral"),
-            F.round(F.avg("amplitude_termica"), 2).alias("amplitude_media"),
-        )
-        .orderBy(F.desc("media_trimestral"))
-    )
+def enriquecer(aprovadas: DataFrame, municipios: DataFrame) -> DataFrame:
+    """Exercicio 3 -- amplitude termica, faixa do dia, e juntar com a regiao.
 
-    return limpo, resumo_regiao, rejeitadas, normalizado
+    Acrescente duas colunas e junte com a tabela de municipios:
+    - `amplitude_termica`: F.round(temperatura_max - temperatura_min, 1).
+    - `faixa_dia`: "fria" quando temperatura_media < 15, "amena" quando
+      <= 22, "quente" acima disso -- uma cadeia de F.when.
+    - Depois, junte com `municipios` por `municipio` (on como string) para
+      trazer a coluna `regiao`.
+
+    Selecione ao final: estacao_id, data, municipio, regiao,
+    temperatura_min, temperatura_max, temperatura_media, amplitude_termica,
+    umidade_pct, faixa_dia.
+
+    Resposta esperada: 886 linhas (mesma contagem das aprovadas), cada uma
+    agora com `regiao`, `amplitude_termica` e `faixa_dia` preenchidos.
+    """
+    # TODO Exercicio 3: withColumn("amplitude_termica", ...), withColumn("faixa_dia", ...),
+    # join com municipios, select final.
+    return None
+
+
+def resumir_por_regiao(limpo: DataFrame) -> DataFrame:
+    """Exercicio 4 -- media trimestral de temperatura e amplitude por regiao.
+
+    Agrupe `limpo` por `regiao` e calcule:
+    - `leituras`: F.count("*").
+    - `media_trimestral`: F.round(F.avg("temperatura_media"), 2).
+    - `amplitude_media`: F.round(F.avg("amplitude_termica"), 2).
+
+    Ordene decrescente por `media_trimestral`.
+
+    Resposta esperada (°C, 2 casas):
+
+        Grande Florianopolis     19.72
+        Vale do Itajai           19.49
+        Norte Catarinense        19.01
+        Sul Catarinense          18.21
+        Oeste Catarinense        17.66
+        Serrana                  14.66
+    """
+    # TODO Exercicio 4: groupBy("regiao") + agg(...) + orderBy(F.desc(...))
+    return None
 
 
 # ---------------------------------------------------------------------------
-# L de Load -- gravar local, depois subir o resultado para o Blob
+# L de Load -- dado, sem exercicio: gravar local, depois subir para o Blob
 # ---------------------------------------------------------------------------
 def carregar(limpo: DataFrame, resumo_regiao: DataFrame, rejeitadas: DataFrame, container) -> None:
     destino_fato = SAIDA / "temperaturas"
@@ -339,39 +376,46 @@ def main() -> None:
         titulo("1. Extract -- baixar do Blob e ler com o Spark")
         bruto, municipios = extrair(spark, container)
 
-        titulo("2. Transform -- normalizar, validar, enriquecer")
-        limpo, resumo_regiao, rejeitadas, normalizado = transformar(bruto, municipios)
-        limpo.cache()
+        titulo("2. Transform -- normalizar (exercicio 1)")
+        normalizado = normalizar(bruto)
         total_bruto = bruto.count()
         total_normalizado = normalizado.count()
-        total_limpo = limpo.count()
-        total_rejeitado = rejeitadas.count()
         print(f"lidas .............: {total_bruto}")
         print(f"apos dropDuplicates: {total_normalizado}"
               f"  (-{total_bruto - total_normalizado} duplicatas)")
-        print(f"aprovadas .........: {total_limpo}")
+
+        titulo("3. Transform -- validar (exercicio 2)")
+        aprovadas, rejeitadas = validar(normalizado)
+        total_aprovado = aprovadas.count()
+        total_rejeitado = rejeitadas.count()
+        print(f"aprovadas .........: {total_aprovado}")
         print(f"rejeitadas ........: {total_rejeitado}")
         # Conciliacao: toda linha normalizada tem de sair de um dos dois lados.
-        assert total_limpo + total_rejeitado == total_normalizado, (
-            f"linhas perdidas: {total_normalizado - total_limpo - total_rejeitado}"
+        assert total_aprovado + total_rejeitado == total_normalizado, (
+            f"linhas perdidas: {total_normalizado - total_aprovado - total_rejeitado}"
         )
         print("conciliacao .......: OK")
         rejeitadas.groupBy("motivo").count().orderBy(F.desc("count")).show(truncate=False)
+
+        titulo("4. Transform -- enriquecer (exercicio 3)")
+        limpo = enriquecer(aprovadas, municipios)
+        limpo.cache()
         limpo.show(5)
 
-        titulo("3. Load -- gravar local e subir para o Blob")
+        titulo("5. Transform -- resumo por regiao (exercicio 4)")
+        resumo_regiao = resumir_por_regiao(limpo)
+        resumo_regiao.show()
+
+        titulo("6. Load -- gravar local e subir para o Blob")
         carregar(limpo, resumo_regiao, rejeitadas, container)
 
-        titulo("4. Verificacao -- ler de volta do Blob")
+        titulo("7. Verificacao -- ler de volta do Blob")
         verificar(container)
-
-        titulo("5. Resumo por regiao")
-        resumo_regiao.show()
 
         titulo("Resumo da execucao")
         print(f"container ....: {container.container_name}")
         print(f"lidas ........: {total_bruto}")
-        print(f"aprovadas ....: {total_limpo}")
+        print(f"aprovadas ....: {total_aprovado}")
         print(f"rejeitadas ...: {total_rejeitado}")
         print(f"saida local ..: {SAIDA}")
         print("saida no Blob : processado/temperaturas, processado/resumo_regiao, "

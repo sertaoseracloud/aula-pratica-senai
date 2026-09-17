@@ -4,6 +4,8 @@ Continuação direta da AULA03: o mesmo ETL — Extract, Transform, Load, com va
 
 Não é preciso ter conta no Azure: o laboratório roda contra o **[floci-az](https://floci.io/az/)**, um emulador de Azure em Docker (o mesmo Blob Storage, entre outros serviços). Trocar para uma conta real depois é uma variável de ambiente — nenhum script muda.
 
+**Este laboratório é um exercício.** `00_conectar_blob.py` vem pronto, mas `01_etl_temperaturas_sc.py` tem quatro funções de Transform com lacunas para você preencher — enunciados, resposta esperada e gabarito em [`EXERCICIOS_AZURE.md`](EXERCICIOS_AZURE.md).
+
 ## Sumário
 
 - [Antes do código: o vocabulário mínimo](#antes-do-código-o-vocabulário-mínimo)
@@ -11,7 +13,7 @@ Não é preciso ter conta no Azure: o laboratório roda contra o **[floci-az](ht
 - [Instalação](#instalação)
 - [Passo a passo para rodar](#passo-a-passo-para-rodar)
 - [Script 00 — conectar](#script-00--conectar-ao-blob)
-- [Script 01 — o ETL](#script-01--o-etl)
+- [Script 01 — o exercício de ETL](#script-01--o-exercício-de-etl)
 - [Glossário](#glossário)
 - [Se algo der errado](#se-algo-der-errado)
 - [O que levar disso para o trabalho](#o-que-levar-disso-para-o-trabalho)
@@ -111,13 +113,16 @@ Se você já rodou a AULA03 nesta máquina, o Python, o Java e o `winutils.exe` 
 .\.venv\Scripts\python.exe 01_etl_temperaturas_sc.py
 ```
 
+O `00` roda de ponta a ponta sem alterações. O `01`, no estado em que vem no clone, para no primeiro `# TODO` com um erro do tipo `AttributeError: 'NoneType' object has no attribute ...` — é o exercício começando, não um script quebrado. Complete as quatro funções seguindo o [`EXERCICIOS_AZURE.md`](EXERCICIOS_AZURE.md) e rode de novo a cada mudança.
+
 ### O que há em cada arquivo
 
 | Arquivo | Função |
 | --- | --- |
 | [`comum.py`](comum.py) | sessão Spark local + cliente do Blob (connection string, container, upload/download) |
 | [`00_conectar_blob.py`](00_conectar_blob.py) | conectar, subir, listar, baixar e apagar um blob — sem Spark |
-| [`01_etl_temperaturas_sc.py`](01_etl_temperaturas_sc.py) | o ETL completo: gera o dado, semeia o Blob, extrai, valida, enriquece, grava e sobe de volta |
+| [`01_etl_temperaturas_sc.py`](01_etl_temperaturas_sc.py) | **o exercício**: Fonte, Extract, Load e Verificação prontos; quatro funções de Transform com `# TODO` para você completar |
+| [`EXERCICIOS_AZURE.md`](EXERCICIOS_AZURE.md) | os quatro enunciados, a resposta esperada de cada um e o gabarito comentado |
 | [`verificar_ambiente.py`](verificar_ambiente.py) | confere Python, Java, PySpark, `winutils`, SDK do Azure e o floci-az respondendo |
 
 ---
@@ -136,13 +141,15 @@ container.delete_blob(...)                # 5. apagar
 
 Se este script rodar sem erro, o `01_etl_temperaturas_sc.py` também vai — as duas únicas operações de rede que ele faz (`upload_blob`/`download_blob`) já foram provadas aqui.
 
-## Script 01 — o ETL
+## Script 01 — o exercício de ETL
+
+`01_etl_temperaturas_sc.py` **não vem pronto**: é o exercício. Fonte, Extract, Load e Verificação já estão implementados; quatro funções de Transform (`normalizar`, `validar`, `enriquecer`, `resumir_por_regiao`) têm um `# TODO Exercicio N` no lugar do código e devolvem `None` até você completá-las. Os quatro enunciados, com a resposta esperada e o gabarito comentado, estão em [`EXERCICIOS_AZURE.md`](EXERCICIOS_AZURE.md).
 
 ### A entrada
 
 Um trimestre inteiro (1º de julho a 30 de setembro de 2024 — 92 dias) de leituras diárias em dez cidades: `estacao_id`, `data`, `municipio`, `temperatura_min`, `temperatura_max`, `temperatura_media`, `umidade_pct`. Gerada uma vez com semente fixa (`random.Random(7)`), com ~5% de sujeira plausível para um sensor de campo: município ausente ou em minúsculo, mínimo e máximo trocados, leitura fora da faixa física, umidade fora de 0–100%, e algumas duplicatas.
 
-### Extract
+### Extract (pronto)
 
 ```python
 baixar_arquivo(container, "bruto/temperaturas_sc.csv", DADOS / "_baixado_temperaturas.csv")
@@ -151,15 +158,15 @@ bruto = spark.read.schema(SCHEMA_TEMPERATURAS).csv(str(DADOS / "_baixado_tempera
 
 O download acontece **antes** do `spark.read` — são duas operações separadas, uma de rede (SDK) e uma de disco (Spark), não uma coisa só.
 
-### Transform
+### Transform (o exercício)
 
-Mesma estrutura da AULA03: normalizar (`upper`/`trim` + `dropDuplicates`), validar com `F.coalesce(regra, F.lit(False))`, montar o `motivo` da rejeição com uma cadeia de `F.when`, e só então enriquecer (`amplitude_termica`, `faixa_dia`) e juntar com a tabela de região.
+Mesma estrutura da AULA03: normalizar (`upper`/`trim` + `dropDuplicates`), validar com `F.coalesce(regra, F.lit(False))`, montar o `motivo` da rejeição com uma cadeia de `F.when`, e só então enriquecer (`amplitude_termica`, `faixa_dia`) e juntar com a tabela de região. É exatamente essa parte — a que não muda seja qual for a nuvem por trás — que fica para você escrever.
 
-### Load
+### Load (pronto)
 
 Grava Parquet particionado por `municipio` **localmente**, depois sobe cada arquivo gerado para o Blob com `subir_pasta()` — que percorre a pasta recursivamente e transforma cada caminho relativo num nome de blob com barras. `_SUCCESS` e os `.crc` do Hadoop ficam de fora: são metadado do driver local, não fariam sentido reaparecendo no Blob.
 
-### Verificação
+### Verificação (pronta)
 
 Baixa de volta um dos arquivos Parquet do resumo — não para reprocessar nada, só para provar que o que subiu é o que desce.
 

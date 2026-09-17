@@ -62,6 +62,8 @@ Depende do ambiente Python da AULA03 (Python, Java, `winutils.exe`) mais um cont
 
 O dado é temperatura de um trimestre em dez cidades de Santa Catarina. A novidade não é o Spark — é onde a entrada e a saída moram, e por que o Spark local não fala com o Blob diretamente (veja o [README do laboratório](AULA04/PYSPARK-AZURE-BLOB/README.md#por-que-baixar-em-vez-de-ler-direto)).
 
+Este laboratório é um **exercício**, no mesmo formato do [ETL com notas do ENEM](AULA03/PYSPARK-BASICO/EXERCICIOS_ENEM.md) da AULA03: o `01_etl_temperaturas_sc.py` vem com quatro funções de Transform incompletas, e o [`EXERCICIOS_AZURE.md`](AULA04/PYSPARK-AZURE-BLOB/EXERCICIOS_AZURE.md) traz o enunciado, a resposta esperada e o gabarito de cada uma.
+
 ### Em qualquer um dos quatro
 
 **Rode um laboratório de cada vez.** Antes de passar para o próximo, encerre o atual:
@@ -303,7 +305,7 @@ O mesmo formato Extract/Transform/Load da AULA03, com a entrada e a saída viven
 | Script | O que faz | O que você vai ver |
 | --- | --- | --- |
 | `00_conectar_blob.py` | conectar, subir, listar, baixar e apagar um blob, sem Spark | as quatro operações que o ETL usa, isoladas |
-| `01_etl_temperaturas_sc.py` | ETL completo: gera o dado, sobe pro Blob, baixa, valida, enriquece, grava e sobe o resultado | 886 aprovadas, 34 rejeitadas **com o motivo de cada uma** |
+| `01_etl_temperaturas_sc.py` | **exercício**: Fonte/Extract/Load prontos, quatro funções de Transform para completar ([gabarito](AULA04/PYSPARK-AZURE-BLOB/EXERCICIOS_AZURE.md)) | 886 aprovadas, 34 rejeitadas **com o motivo de cada uma** |
 
 ### O que ele acrescenta à AULA03
 
