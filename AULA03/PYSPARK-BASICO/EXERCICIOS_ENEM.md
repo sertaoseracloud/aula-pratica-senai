@@ -280,6 +280,53 @@ Rode o script inteiro a cada mudança:
 .\.venv\Scripts\python.exe 05_etl_enem_sc.py
 ```
 
+### O que precisa ser construído
+
+```mermaid
+flowchart TD
+    A[("dados/enem_sc_bruto.csv")] --> B["extrair()\nspark.read com schema"]
+    B --> C["normalizar()\n⚠️ Exercício 10"]
+    C --> D["validar()\n⚠️ Exercício 11"]
+    D -->|aprovados| E["enriquecer()\n⚠️ Exercício 12\nmedia_geral, faixa_desempenho"]
+    D -->|rejeitados + motivo| R[("saida/enem_rejeitados")]
+    E --> F["resumir_por_regiao()\n⚠️ Exercício 13"]
+    E --> G["municipios_destaque()\n⚠️ Exercício 14"]
+    E --> H[("saida/enem")]
+    F --> I[("saida/resumo_regiao")]
+    G --> J[("saida/municipios_destaque")]
+
+    style C fill:#fff3cd,stroke:#c9a227
+    style D fill:#fff3cd,stroke:#c9a227
+    style E fill:#fff3cd,stroke:#c9a227
+    style F fill:#fff3cd,stroke:#c9a227
+    style G fill:#fff3cd,stroke:#c9a227
+```
+
+```mermaid
+sequenceDiagram
+    actor Aluno
+    participant Script as 05_etl_enem_sc.py
+    participant Spark
+    participant Disco
+
+    Aluno->>Script: python 05_etl_enem_sc.py
+    Script->>Disco: gerar_csv_enem() / gerar_csv_municipios()
+    Script->>Spark: extrair() — spark.read(schema)
+    Spark-->>Script: DataFrame bruto + municipios
+    Script->>Script: normalizar(bruto)
+    Note over Script: ⚠️ Exercício 10
+    Script->>Script: validar(normalizado)
+    Note over Script: ⚠️ Exercício 11
+    Script->>Script: enriquecer(aprovados)
+    Note over Script: ⚠️ Exercício 12
+    Script->>Script: resumir_por_regiao(limpo)
+    Note over Script: ⚠️ Exercício 13
+    Script->>Script: municipios_destaque(limpo)
+    Note over Script: ⚠️ Exercício 14
+    Script->>Disco: carregar(): grava Parquet/CSV
+    Script-->>Aluno: conciliação OK / contagens no console
+```
+
 ### 10. Normalizar e remover duplicatas
 
 Na função `normalizar`, escreva:

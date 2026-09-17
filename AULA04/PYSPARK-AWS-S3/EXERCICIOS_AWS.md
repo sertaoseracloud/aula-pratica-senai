@@ -4,6 +4,58 @@ Quatro exercícios, na ordem em que o pipeline processa o dado. É a mesma mecâ
 
 Todos os gabaritos foram conferidos em Python puro contra o dado gerado com a semente fixa do script — os números abaixo são a saída real, não uma estimativa.
 
+## O que precisa ser construído
+
+```mermaid
+flowchart TD
+    A[("dados/energia_sc.csv")] -->|semear_s3| B[("floci\nbruto/energia_sc.csv")]
+    B -->|baixar_arquivo| C["extrair()\nspark.read com schema"]
+    C --> D["normalizar()\n⚠️ Exercício 1"]
+    D --> E["validar()\n⚠️ Exercício 2"]
+    E -->|aprovadas| F["enriquecer()\n⚠️ Exercício 3"]
+    E -->|rejeitadas + motivo| R[("saida/energia_rejeitada")]
+    F --> G["resumir_por_regiao()\n⚠️ Exercício 4"]
+    F --> H[("saida/energia")]
+    G --> I[("saida/resumo_regiao")]
+    H -->|subir_pasta| J[("floci\nprocessado/energia")]
+    I -->|subir_pasta| K[("floci\nprocessado/resumo_regiao")]
+    R -->|subir_pasta| L[("floci\nprocessado/energia_rejeitada")]
+
+    style D fill:#fff3cd,stroke:#c9a227
+    style E fill:#fff3cd,stroke:#c9a227
+    style F fill:#fff3cd,stroke:#c9a227
+    style G fill:#fff3cd,stroke:#c9a227
+```
+
+```mermaid
+sequenceDiagram
+    actor Aluno
+    participant Script as 01_etl_energia_sc.py
+    participant S3 as floci (S3)
+    participant Spark
+    participant Disco
+
+    Aluno->>Script: python 01_etl_energia_sc.py
+    Script->>Disco: gerar_csv_energia() / gerar_csv_municipios()
+    Script->>S3: semear_s3() — upload de bruto/*.csv
+    Script->>S3: baixar_arquivo() — download de bruto/*.csv
+    S3-->>Disco: arquivos locais (_baixado_*.csv)
+    Script->>Spark: extrair() — spark.read(schema)
+    Spark-->>Script: DataFrame bruto + municipios
+    Script->>Script: normalizar(bruto)
+    Note over Script: ⚠️ Exercício 1
+    Script->>Script: validar(normalizado)
+    Note over Script: ⚠️ Exercício 2
+    Script->>Script: enriquecer(aprovadas, municipios)
+    Note over Script: ⚠️ Exercício 3
+    Script->>Script: resumir_por_regiao(limpo)
+    Note over Script: ⚠️ Exercício 4
+    Script->>Disco: carregar(): grava Parquet/CSV local
+    Script->>S3: subir_pasta() — upload de processado/*
+    Script->>S3: verificar() — download de volta para conferência
+    Script-->>Aluno: conciliação OK / contagens no console
+```
+
 ## Como rodar
 
 Antes de tudo, suba o floci e confira o ambiente (veja o [SETUP.md](SETUP.md) se ainda não fez isso):

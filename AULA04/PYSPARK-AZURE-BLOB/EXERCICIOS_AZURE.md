@@ -4,6 +4,58 @@ Quatro exercícios, na ordem em que o pipeline processa o dado. É a mesma mecâ
 
 Todos os gabaritos foram conferidos em Python puro contra o dado gerado com a semente fixa do script — os números abaixo são a saída real, não uma estimativa.
 
+## O que precisa ser construído
+
+```mermaid
+flowchart TD
+    A[("dados/temperaturas_sc.csv")] -->|semear_blob| B[("floci-az\nbruto/temperaturas_sc.csv")]
+    B -->|baixar_arquivo| C["extrair()\nspark.read com schema"]
+    C --> D["normalizar()\n⚠️ Exercício 1"]
+    D --> E["validar()\n⚠️ Exercício 2"]
+    E -->|aprovadas| F["enriquecer()\n⚠️ Exercício 3"]
+    E -->|rejeitadas + motivo| R[("saida/temp_rejeitadas")]
+    F --> G["resumir_por_regiao()\n⚠️ Exercício 4"]
+    F --> H[("saida/temperaturas")]
+    G --> I[("saida/resumo_regiao")]
+    H -->|subir_pasta| J[("floci-az\nprocessado/temperaturas")]
+    I -->|subir_pasta| K[("floci-az\nprocessado/resumo_regiao")]
+    R -->|subir_pasta| L[("floci-az\nprocessado/temp_rejeitadas")]
+
+    style D fill:#fff3cd,stroke:#c9a227
+    style E fill:#fff3cd,stroke:#c9a227
+    style F fill:#fff3cd,stroke:#c9a227
+    style G fill:#fff3cd,stroke:#c9a227
+```
+
+```mermaid
+sequenceDiagram
+    actor Aluno
+    participant Script as 01_etl_temperaturas_sc.py
+    participant Blob as floci-az (Blob)
+    participant Spark
+    participant Disco
+
+    Aluno->>Script: python 01_etl_temperaturas_sc.py
+    Script->>Disco: gerar_csv_temperaturas() / gerar_csv_municipios()
+    Script->>Blob: semear_blob() — upload de bruto/*.csv
+    Script->>Blob: baixar_arquivo() — download de bruto/*.csv
+    Blob-->>Disco: arquivos locais (_baixado_*.csv)
+    Script->>Spark: extrair() — spark.read(schema)
+    Spark-->>Script: DataFrame bruto + municipios
+    Script->>Script: normalizar(bruto)
+    Note over Script: ⚠️ Exercício 1
+    Script->>Script: validar(normalizado)
+    Note over Script: ⚠️ Exercício 2
+    Script->>Script: enriquecer(aprovadas, municipios)
+    Note over Script: ⚠️ Exercício 3
+    Script->>Script: resumir_por_regiao(limpo)
+    Note over Script: ⚠️ Exercício 4
+    Script->>Disco: carregar(): grava Parquet/CSV local
+    Script->>Blob: subir_pasta() — upload de processado/*
+    Script->>Blob: verificar() — download de volta para conferência
+    Script-->>Aluno: conciliação OK / contagens no console
+```
+
 ## Como rodar
 
 Antes de tudo, suba o floci-az e confira o ambiente (veja o [SETUP.md](SETUP.md) se ainda não fez isso):

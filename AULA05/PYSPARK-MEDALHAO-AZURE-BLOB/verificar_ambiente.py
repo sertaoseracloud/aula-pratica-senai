@@ -1,0 +1,187 @@
+"""Confere, um a um, os pre-requisitos deste laboratorio.
+
+    python verificar_ambiente.py
+
+E o mesmo `verificar_ambiente.py` do laboratorio de ETL da AULA04
+(PYSPARK-AZURE-BLOB), com as mesmas seis checagens: Python, PySpark, Java,
+winutils, o SDK do Azure e o floci-az respondendo.
+
+Nao sobe sessao Spark nem conecta no Blob de verdade alem de um teste de
+socket: roda em ~1 s.
+"""
+
+import os
+import platform
+import shutil
+import socket
+import subprocess
+import sys
+from pathlib import Path
+from urllib.parse import urlparse
+
+RAIZ = Path(__file__).resolve().parent
+
+OK = "  OK   "
+ERRO = " FALTA "
+AVISO = " AVISO "
+
+problemas: list[str] = []
+
+
+def relatar(marca: str, titulo: str, detalhe: str, correcao: str = "") -> None:
+    print(f"[{marca}] {titulo:<22} {detalhe}")
+    if correcao:
+        print(f"{'':<9}-> {correcao}")
+        problemas.append(titulo)
+
+
+# ---------------------------------------------------------------------------
+print(f"\nVerificando o ambiente em {RAIZ}\n")
+
+# 1. Interpretador Python -----------------------------------------------------
+versao = sys.version_info
+descricao = f"{versao.major}.{versao.minor}.{versao.micro}"
+dentro_do_venv = str(RAIZ / ".venv").lower() in sys.executable.lower()
+
+if (3, 8) <= (versao.major, versao.minor) <= (3, 12):
+    relatar(OK, "Python", f"{descricao}  ({sys.executable})")
+else:
+    relatar(
+        ERRO,
+        "Python",
+        f"{descricao} -- o PySpark 3.5 suporta apenas 3.8 a 3.12",
+        "recrie o ambiente: py -3.11 -m venv .venv",
+    )
+
+if not dentro_do_venv:
+    relatar(
+        AVISO,
+        "Ambiente virtual",
+        "voce NAO esta usando o .venv desta pasta",
+        r"rode com .\.venv\Scripts\python.exe verificar_ambiente.py",
+    )
+
+# 2. PySpark ------------------------------------------------------------------
+versao_pyspark = None
+try:
+    import pyspark
+
+    versao_pyspark = int(pyspark.__version__.split(".")[0])
+    relatar(OK, "PySpark", f"{pyspark.__version__}")
+except ImportError:
+    relatar(
+        ERRO,
+        "PySpark",
+        "nao instalado neste interpretador",
+        'pip install "pyspark==3.5.3"',
+    )
+
+# 3. Java ---------------------------------------------------------------------
+executavel_java = shutil.which("java")
+if executavel_java is None:
+    relatar(
+        ERRO,
+        "Java",
+        "nao encontrado no PATH",
+        "instale um JDK 8, 11 ou 17 (o Spark roda em JVM)",
+    )
+else:
+    saida = subprocess.run(
+        [executavel_java, "-version"], capture_output=True, text=True
+    ).stderr.splitlines()
+    primeira = saida[0] if saida else executavel_java
+    relatar(OK, "Java", primeira)
+
+    import re
+
+    achado = re.search(r'"(\d+)(?:\.(\d+))?', primeira)
+    versao_java = None
+    if achado:
+        maior = int(achado.group(1))
+        versao_java = int(achado.group(2) or 0) if maior == 1 else maior
+
+    if versao_java is not None and versao_pyspark is not None:
+        if versao_pyspark >= 4 and versao_java < 17:
+            relatar(
+                ERRO,
+                "Java x PySpark",
+                f"PySpark {versao_pyspark}.x exige JDK 17+, e aqui ha o {versao_java}",
+                "use pyspark==3.5.3 (roda em Java 8) ou instale um JDK 17",
+            )
+        elif versao_pyspark == 3 and versao_java > 17:
+            relatar(
+                AVISO,
+                "Java x PySpark",
+                f"PySpark 3.5 e testado ate o JDK 17; aqui ha o {versao_java}",
+                "se a sessao nao subir, instale um JDK 17",
+            )
+
+# 4. winutils (so no Windows) -------------------------------------------------
+if os.name == "nt":
+    binarios = {"winutils.exe": 112_640, "hadoop.dll": 84_992}
+    faltando = [n for n in binarios if not (RAIZ / "hadoop" / "bin" / n).exists()]
+    if faltando:
+        relatar(
+            ERRO,
+            "winutils (Windows)",
+            f"falta {', '.join(faltando)} em hadoop/bin/",
+            "veja o Passo 3 do SETUP.md",
+        )
+    else:
+        pequenos = [
+            n
+            for n, tamanho in binarios.items()
+            if (RAIZ / "hadoop" / "bin" / n).stat().st_size < tamanho // 2
+        ]
+        if pequenos:
+            relatar(
+                ERRO,
+                "winutils (Windows)",
+                f"{', '.join(pequenos)} tem tamanho suspeito",
+                "apague hadoop/bin/ e baixe de novo (Passo 3 do SETUP.md)",
+            )
+        else:
+            relatar(OK, "winutils (Windows)", "hadoop/bin/ completo")
+else:
+    relatar(OK, "winutils", f"desnecessario em {platform.system()}")
+
+# 5. SDK do Azure Blob Storage --------------------------------------------------
+try:
+    import azure.storage.blob as _blob_sdk
+
+    relatar(OK, "azure-storage-blob", getattr(_blob_sdk, "__version__", "instalado"))
+except ImportError:
+    relatar(
+        ERRO,
+        "azure-storage-blob",
+        "nao instalado neste interpretador",
+        "pip install azure-storage-blob",
+    )
+
+# 6. floci-az respondendo --------------------------------------------------------
+try:
+    from comum import AZURE_CONNECTION_STRING
+
+    partes = dict(item.split("=", 1) for item in AZURE_CONNECTION_STRING.strip(";").split(";"))
+    endpoint = urlparse(partes.get("BlobEndpoint", ""))
+    host, porta = endpoint.hostname or "127.0.0.1", endpoint.port or 4577
+
+    with socket.create_connection((host, porta), timeout=2):
+        relatar(OK, "floci-az", f"respondendo em {host}:{porta}")
+except ImportError:
+    relatar(AVISO, "floci-az", "nao foi possivel importar comum.py para checar")
+except OSError:
+    relatar(
+        ERRO,
+        "floci-az",
+        f"sem resposta em {host}:{porta}",
+        "suba o container: docker compose up -d --wait (veja o SETUP.md)",
+    )
+
+# ---------------------------------------------------------------------------
+print()
+if problemas:
+    print(f"{len(problemas)} item(ns) a resolver: {', '.join(problemas)}")
+    sys.exit(1)
+
+print("Ambiente pronto. Comece por: python 00_conectar_blob.py")

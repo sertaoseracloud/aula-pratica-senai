@@ -280,6 +280,48 @@ Sem `Window`, isso exigiria um `groupBy` seguido de um `join` de volta na tabela
 
 Os próximos exercícios são alterações no `03_etl_local.py`. Faça uma cópia antes de mexer.
 
+### Onde cada exercício entra no pipeline
+
+```mermaid
+flowchart TD
+    A[("dados/vendas_brutas.csv")] --> B["extrair()\nspark.read com schema"]
+    B --> C["transformar(): normalizar + dropDuplicates"]
+    C --> D["regra_valida\n⚠️ Exercício 10: + preço suspeito"]
+    D -->|aprovadas| E["limpo: total, ano, mes, faixa_valor"]
+    D -->|rejeitadas + motivo| F[("saida/rejeitados")]
+    E --> G["resumo: groupBy uf, mes, categoria"]
+    E --> H["clientes\n⚠️ Exercício 12: ticket médio, filtro ≥60 pedidos"]
+    E --> I["carregar(): write Parquet\n⚠️ Exercício 11: partitionBy mes"]
+    G --> J[("saida/resumo_mensal")]
+    H --> K[("saida/clientes")]
+    I --> L[("saida/vendas (particionado)")]
+
+    style D fill:#fff3cd,stroke:#c9a227
+    style H fill:#fff3cd,stroke:#c9a227
+    style I fill:#fff3cd,stroke:#c9a227
+```
+
+```mermaid
+sequenceDiagram
+    actor Aluno
+    participant Script as 03_etl_local.py
+    participant Spark
+    participant Disco
+
+    Aluno->>Script: python 03_etl_local.py
+    Script->>Disco: gerar_csv_bruto() (só na 1ª vez)
+    Script->>Spark: extrair() — spark.read(schema)
+    Spark-->>Script: DataFrame bruto
+    Script->>Script: transformar(): normalizado, regra_valida
+    Note over Script: ⚠️ Exercício 10 — acrescentar "preço suspeito"<br/>à regra_valida e ao motivo
+    Script->>Script: limpo, resumo = agregações
+    Note over Script: ⚠️ Exercício 12 — montar a tabela `clientes`
+    Script->>Disco: carregar(): write Parquet particionado
+    Note over Script: ⚠️ Exercício 11 — trocar partitionBy("uf")<br/>por partitionBy("mes")
+    Script->>Disco: verificar(): ler de volta e conferir contagens
+    Script-->>Aluno: conciliação OK / contagens no console
+```
+
 ### 10. Uma nova regra de validação
 
 Rejeite também os pedidos com `preco` acima de R$ 2 900 (na base gerada eles existem e são plausíveis, mas suponha que a regra de negócio os considere suspeitos). Acrescente o motivo `"preco suspeito"` e confirme que a conciliação continua fechando.

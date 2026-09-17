@@ -4,6 +4,69 @@ Cinco exercícios, espalhados por três jobs independentes — um por camada (Br
 
 Todos os gabaritos foram conferidos em Python puro contra o dado gerado com a semente fixa do job de Bronze — os números abaixo são a saída real, não uma estimativa.
 
+## O que precisa ser construído
+
+```mermaid
+flowchart TD
+    subgraph J1["Job 1 — 01_bronze_ingestao.py"]
+        A[("dados/qualidade_ar_sc.csv")] --> B["extrair()\nspark.read com schema"]
+        B --> C["enriquecer_proveniencia()\n⚠️ Exercício 1"]
+        C --> D[("camadas/bronze/qualidade_ar")]
+    end
+    subgraph J2["Job 2 — 02_silver_limpeza.py"]
+        D --> E["extrair(): lê a Bronze"]
+        E --> F["normalizar()\n⚠️ Exercício 2"]
+        F --> G["validar()\n⚠️ Exercício 3"]
+        G -->|aprovadas| H[("camadas/silver/qualidade_ar")]
+        G -->|rejeitadas + motivo| I[("camadas/silver/qualidade_ar_rejeitada")]
+    end
+    subgraph J3["Job 3 — 03_gold_agregados.py"]
+        H --> K["extrair(): lê a Silver + municipios"]
+        K --> L["enriquecer()\n⚠️ Exercício 4"]
+        L --> M["resumir_por_regiao()\n⚠️ Exercício 5"]
+        L --> N[("camadas/gold/fato_qualidade_ar")]
+        M --> O[("camadas/gold/resumo_regiao")]
+    end
+
+    style C fill:#fff3cd,stroke:#c9a227
+    style F fill:#fff3cd,stroke:#c9a227
+    style G fill:#fff3cd,stroke:#c9a227
+    style L fill:#fff3cd,stroke:#c9a227
+    style M fill:#fff3cd,stroke:#c9a227
+```
+
+```mermaid
+sequenceDiagram
+    actor Aluno
+    participant J1 as Job 1 (Bronze)
+    participant J2 as Job 2 (Silver)
+    participant J3 as Job 3 (Gold)
+    participant Disco
+
+    Aluno->>J1: python 01_bronze_ingestao.py
+    J1->>Disco: gerar_csv_qualidade_ar()
+    J1->>J1: extrair() → enriquecer_proveniencia()
+    Note over J1: ⚠️ Exercício 1
+    J1->>Disco: carregar_bronze() → camadas/bronze/
+
+    Aluno->>J2: python 02_silver_limpeza.py
+    J2->>Disco: extrair(): checa e lê camadas/bronze/
+    J2->>J2: normalizar()
+    Note over J2: ⚠️ Exercício 2
+    J2->>J2: validar()
+    Note over J2: ⚠️ Exercício 3
+    J2->>Disco: carregar_silver() → camadas/silver/
+
+    Aluno->>J3: python 03_gold_agregados.py
+    J3->>Disco: extrair(): checa e lê camadas/silver/ + municipios
+    J3->>J3: enriquecer()
+    Note over J3: ⚠️ Exercício 4
+    J3->>J3: resumir_por_regiao()
+    Note over J3: ⚠️ Exercício 5
+    J3->>Disco: carregar_gold() → camadas/gold/
+    J3-->>Aluno: pipeline completo (Bronze → Silver → Gold)
+```
+
 ## Como rodar
 
 ```powershell

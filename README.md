@@ -1,6 +1,6 @@
 # Laboratórios de bancos distribuídos — o que acontece de verdade quando você grava
 
-Onze laboratórios, a maioria em Docker, divididos em cinco aulas.
+Treze laboratórios, a maioria em Docker, divididos em cinco aulas.
 
 **AULA01 — comportamento sob falha (PACELC).** Você sobe um banco distribuído, quebra a rede de propósito e mede o que acontece. Em vez de decorar que "Cassandra é AP", você vê na tela em que momento exato ele aceita ou recusa uma escrita. Os dois estresses são sempre os mesmos:
 
@@ -13,7 +13,7 @@ Onze laboratórios, a maioria em Docker, divididos em cinco aulas.
 
 **AULA04 — o mesmo ETL, com o dado morando na nuvem.** Continuação direta da AULA03: mesma estrutura de Extract/Transform/Load, mesma validação com motivo de rejeição, só que agora a entrada e a saída vivem na nuvem — dois laboratórios, dois exercícios, duas nuvens emuladas localmente sem precisar de conta real: Azure Blob Storage (via [floci-az](https://floci.io/az/)) e AWS S3 (via [floci](https://floci.io/aws/)). A pergunta muda de "como processar" para "como o processamento conversa com o armazenamento" — e a resposta, nos dois casos, é que o Spark local nunca fala com o armazenamento remoto diretamente: um SDK baixa, o Spark processa, o mesmo SDK sobe o resultado de volta.
 
-**AULA05 — a mesma validação, organizada em camadas.** Muda a unidade de trabalho outra vez: em vez de um script com quatro funções, a arquitetura medalhão (Bronze/Silver/Gold) vira três **jobs independentes**, cada um com sua própria sessão Spark, lendo do disco o que o job anterior gravou. O dado é qualidade do ar num trimestre nas mesmas dez cidades de SC. A pergunta desta aula não é mais "onde o dado mora", é "onde termina uma unidade de trabalho e começa a próxima" — e por que separar por camada torna possível reprocessar uma regra de negócio na Gold sem tocar na ingestão.
+**AULA05 — a mesma validação, organizada em camadas.** Muda a unidade de trabalho outra vez: em vez de um script com quatro funções, a arquitetura medalhão (Bronze/Silver/Gold) vira três **jobs independentes**, cada um com sua própria sessão Spark, lendo do que o job anterior gravou. Três laboratórios, três variações do mesmo desenho: um 100% local (qualidade do ar), um com cada camada vivendo no Azure Blob (pluviometria) e um com cada camada vivendo no S3 (coleta de resíduos) — sempre nas mesmas dez cidades de SC. A pergunta desta aula não é mais "onde o dado mora", é "onde termina uma unidade de trabalho e começa a próxima" — e por que separar por camada torna possível reprocessar uma regra de negócio na Gold sem tocar na ingestão.
 
 Todos os números publicados aqui foram medidos executando os laboratórios. Onde o resultado contrariou o esperado, o texto diz o que aconteceu e por quê.
 
@@ -72,10 +72,14 @@ Os dois são **exercícios**, no mesmo formato do [ETL com notas do ENEM](AULA03
 | # | Laboratório | Interface | Motor | Duração |
 | --- | --- | --- | --- | --- |
 | 11 | [Arquitetura medalhão: Bronze, Silver e Gold](AULA05/PYSPARK-MEDALHAO/README.md) | três scripts `.py` no terminal | PySpark 3.5.3 local, sem Docker | **~10 min** |
+| 12 | [Arquitetura medalhão com Azure Blob Storage](AULA05/PYSPARK-MEDALHAO-AZURE-BLOB/README.md) | quatro scripts `.py` + floci-az em Docker | PySpark 3.5.3 local + floci-az | **~10 min** |
+| 13 | [Arquitetura medalhão com AWS S3](AULA05/PYSPARK-MEDALHAO-AWS-S3/README.md) | quatro scripts `.py` + floci em Docker | PySpark 3.5.3 local + floci | **~10 min** |
 
-Volta a ser só local, como a AULA03 — sem Docker, sem SDK de nuvem. A mudança agora é estrutural: em vez de Extract/Transform/Load como funções de um script só, cada camada da arquitetura medalhão (Bronze/Silver/Gold) é um **job independente**, que lê do disco a saída do job anterior e para com uma mensagem clara se essa saída não existir.
+O Laboratório 11 é só local, como a AULA03 — sem Docker, sem SDK de nuvem. A mudança é estrutural: em vez de Extract/Transform/Load como funções de um script só, cada camada da arquitetura medalhão (Bronze/Silver/Gold) é um **job independente**, que lê do disco a saída do job anterior e para com uma mensagem clara se essa saída não existir. O dado é qualidade do ar (PM2.5, PM10, CO) de um trimestre, nas mesmas dez cidades de SC dos laboratórios da AULA04.
 
-O dado é qualidade do ar (PM2.5, PM10, CO) de um trimestre, nas mesmas dez cidades de SC dos laboratórios da AULA04. É também um **exercício**, com cinco funções incompletas espalhadas pelos três jobs — enunciado, resposta esperada e gabarito em [`EXERCICIOS_MEDALHAO.md`](AULA05/PYSPARK-MEDALHAO/EXERCICIOS_MEDALHAO.md).
+Os Laboratórios 12 e 13 juntam essa ideia com a nuvem da AULA04: as mesmas três camadas, só que cada uma vive num prefixo de Blob ou de bucket S3, não numa pasta local — cada job baixa a camada anterior inteira antes de processar, e sobe o resultado de volta. O 12 usa pluviometria (chuva e umidade); o 13, coleta de resíduos sólidos (toneladas totais e recicláveis).
+
+Os três são **exercícios**, com cinco funções incompletas cada um, espalhadas pelos três jobs — enunciado, resposta esperada e gabarito em [`EXERCICIOS_MEDALHAO.md`](AULA05/PYSPARK-MEDALHAO/EXERCICIOS_MEDALHAO.md), [`EXERCICIOS_CHUVA.md`](AULA05/PYSPARK-MEDALHAO-AZURE-BLOB/EXERCICIOS_CHUVA.md) e [`EXERCICIOS_RESIDUOS.md`](AULA05/PYSPARK-MEDALHAO-AWS-S3/EXERCICIOS_RESIDUOS.md).
 
 ### Em qualquer um dos cinco
 
@@ -93,7 +97,7 @@ A AULA03 leva **cerca de 10 minutos**, dos quais 2 são preparo único do ambien
 
 A AULA04 leva **cerca de 8 minutos por laboratório** se o ambiente da AULA03 já existe — a diferença é só subir o emulador (`floci-az` ou `floci`) e instalar o SDK correspondente (`azure-storage-blob` ou `boto3`). Do zero, some o tempo de preparo da AULA03.
 
-A AULA05 leva **cerca de 10 minutos** se o ambiente da AULA03 já existe — é só rodar os três jobs em sequência (ou `executar_pipeline.py`). Do zero, some o tempo de preparo da AULA03: não precisa de Docker nem de SDK de nuvem.
+A AULA05 leva **cerca de 10 minutos por laboratório** se o ambiente da AULA03 (e, para o 12 e o 13, o do laboratório de nuvem correspondente da AULA04) já existe — é só rodar os três jobs em sequência (ou `executar_pipeline.py`). O Laboratório 11 não precisa de Docker nem de SDK de nuvem; o 12 e o 13 reaproveitam o `floci-az`/`floci` já usados na AULA04, se estiverem rodando.
 
 ---
 
@@ -365,6 +369,30 @@ A Bronze guarda **as 923 leituras geradas, sem exceção** — inclusive as fisi
 
 O preço da separação por camada é medido, não hipotético: cada job paga o custo de subir uma JVM (a mesma fração de segundos que já aparecia nos "~10 minutos" do laboratório da AULA03). Para um pipeline deste tamanho, três inicializações de Spark custam pouco perto do que se ganha — poder reprocessar só a Gold quando uma regra de negócio muda, sem tocar na ingestão nem na validação.
 
+### 12. Arquitetura medalhão com Azure Blob Storage — [abrir](AULA05/PYSPARK-MEDALHAO-AZURE-BLOB/README.md)
+
+A mesma arquitetura de três jobs, agora com cada camada vivendo num prefixo do Blob Storage (via floci-az) em vez de uma pasta local. O dado é pluviometria (chuva e umidade) do mesmo trimestre, nas mesmas dez cidades.
+
+| Job | Camada | O que faz | O que você vai ver |
+| --- | --- | --- | --- |
+| `01_bronze_ingestao.py` | Bronze | gera e semeia o Blob, acrescenta proveniência ([exercício 1](AULA05/PYSPARK-MEDALHAO-AZURE-BLOB/EXERCICIOS_CHUVA.md)) | 924 leituras — idêntico ao CSV bruto |
+| `02_silver_limpeza.py` | Silver | baixa a Bronze do Blob, normaliza, valida com motivo ([exercícios 2–3](AULA05/PYSPARK-MEDALHAO-AZURE-BLOB/EXERCICIOS_CHUVA.md)) | 885 aprovadas, 35 rejeitadas |
+| `03_gold_agregados.py` | Gold | baixa a Silver, classifica, junta com região, resume ([exercícios 4–5](AULA05/PYSPARK-MEDALHAO-AZURE-BLOB/EXERCICIOS_CHUVA.md)) | total trimestral de chuva e dias de chuva forte por região |
+
+A peça nova aqui é `baixar_pasta()`: como uma camada Parquet é sempre várias partes (`part-....parquet`), e não um blob só, cada job precisa baixar o **prefixo inteiro** antes de ler — o inverso do `subir_pasta()` que o ETL da AULA04 já usava. E a checagem "a camada anterior existe" muda de `Path.exists()` para `prefixo_existe()`: um prefixo de Blob só "existe" enquanto houver pelo menos um objeto com esse nome no começo.
+
+### 13. Arquitetura medalhão com AWS S3 — [abrir](AULA05/PYSPARK-MEDALHAO-AWS-S3/README.md)
+
+A mesma ideia, trocando o Blob pelo S3 (via floci). O dado é coleta de resíduos sólidos (toneladas totais e recicláveis) do mesmo trimestre.
+
+| Job | Camada | O que faz | O que você vai ver |
+| --- | --- | --- | --- |
+| `01_bronze_ingestao.py` | Bronze | gera e semeia o S3, acrescenta proveniência ([exercício 1](AULA05/PYSPARK-MEDALHAO-AWS-S3/EXERCICIOS_RESIDUOS.md)) | 921 leituras — idêntico ao CSV bruto |
+| `02_silver_limpeza.py` | Silver | baixa a Bronze do S3, normaliza, valida com motivo ([exercícios 2–3](AULA05/PYSPARK-MEDALHAO-AWS-S3/EXERCICIOS_RESIDUOS.md)) | 856 aprovadas, 64 rejeitadas |
+| `03_gold_agregados.py` | Gold | baixa a Silver, calcula taxa de reciclagem, junta com região, resume ([exercícios 4–5](AULA05/PYSPARK-MEDALHAO-AWS-S3/EXERCICIOS_RESIDUOS.md)) | total coletado e taxa média de reciclagem por região |
+
+**Um limiar de validação "óbvio" rejeitou dado bom.** Das 64 leituras rejeitadas, 47 caem por `toneladas_total` fora de `[0, 500]` — bem mais do que a sujeira injetada de propósito explicaria sozinha. Cidades grandes partem de uma base de quase 500 toneladas/dia, e a variação natural do dado às vezes ultrapassa o limite por acaso, sem sujeira nenhuma envolvida. A lição não é sobre S3 nem sobre medalhão: é que **todo limiar de validação devia nascer de olhar a distribuição real da coluna**, não da intuição de quem escreveu a regra antes de ver o dado.
+
 ---
 
 ## Antes de começar
@@ -374,8 +402,8 @@ O preço da separação por camada é medido, não hipotético: cada job paga o 
 | Docker Engine | 28.4.0 |
 | Docker Compose | v2.39.2 |
 | Pumba (injeta a latência) | `gaiaadm/pumba` — é uma imagem, não precisa instalar; só a AULA01 usa |
-| floci-az (emulador de Azure) | `floci/floci-az:latest` — imagem, não precisa instalar; só o Laboratório 9 usa |
-| floci (emulador de AWS) | `floci/floci:latest` — imagem, não precisa instalar; só o Laboratório 10 usa |
+| floci-az (emulador de Azure) | `floci/floci-az:latest` — imagem, não precisa instalar; usado pelos Laboratórios 9 e 12 |
+| floci (emulador de AWS) | `floci/floci:latest` — imagem, não precisa instalar; usado pelos Laboratórios 10 e 13 |
 
 Não instale mais nada. Os clientes de linha de comando (`aws`, `cqlsh`, `redis-cli`, `psql`, `mongosh`) rodam dentro dos contêineres — exceto na AULA04, onde é o próprio script Python (via SDK) que fala com o emulador.
 
