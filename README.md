@@ -1,6 +1,6 @@
 # Laboratórios de bancos distribuídos — o que acontece de verdade quando você grava
 
-Dez laboratórios, a maioria em Docker, divididos em quatro aulas.
+Onze laboratórios, a maioria em Docker, divididos em cinco aulas.
 
 **AULA01 — comportamento sob falha (PACELC).** Você sobe um banco distribuído, quebra a rede de propósito e mede o que acontece. Em vez de decorar que "Cassandra é AP", você vê na tela em que momento exato ele aceita ou recusa uma escrita. Os dois estresses são sempre os mesmos:
 
@@ -12,6 +12,8 @@ Dez laboratórios, a maioria em Docker, divididos em quatro aulas.
 **AULA03 — processar e gravar em escala.** Três scripts PySpark constroem um pipeline inteiro na sua própria máquina: criação do DataFrame, partições, as transformações do dia a dia e um ETL que valida, rejeita com motivo e grava Parquet particionado em disco. Aqui o banco sai de cena e entra o motor de processamento — junto com duas descobertas: o Spark não executa o que você escreveu, e sim o plano que ele reescreveu; e uma linha pode sumir de um pipeline inteiro por causa de um `NULL` numa condição de validação.
 
 **AULA04 — o mesmo ETL, com o dado morando na nuvem.** Continuação direta da AULA03: mesma estrutura de Extract/Transform/Load, mesma validação com motivo de rejeição, só que agora a entrada e a saída vivem na nuvem — dois laboratórios, dois exercícios, duas nuvens emuladas localmente sem precisar de conta real: Azure Blob Storage (via [floci-az](https://floci.io/az/)) e AWS S3 (via [floci](https://floci.io/aws/)). A pergunta muda de "como processar" para "como o processamento conversa com o armazenamento" — e a resposta, nos dois casos, é que o Spark local nunca fala com o armazenamento remoto diretamente: um SDK baixa, o Spark processa, o mesmo SDK sobe o resultado de volta.
+
+**AULA05 — a mesma validação, organizada em camadas.** Muda a unidade de trabalho outra vez: em vez de um script com quatro funções, a arquitetura medalhão (Bronze/Silver/Gold) vira três **jobs independentes**, cada um com sua própria sessão Spark, lendo do disco o que o job anterior gravou. O dado é qualidade do ar num trimestre nas mesmas dez cidades de SC. A pergunta desta aula não é mais "onde o dado mora", é "onde termina uma unidade de trabalho e começa a próxima" — e por que separar por camada torna possível reprocessar uma regra de negócio na Gold sem tocar na ingestão.
 
 Todos os números publicados aqui foram medidos executando os laboratórios. Onde o resultado contrariou o esperado, o texto diz o que aconteceu e por quê.
 
@@ -65,7 +67,17 @@ O Laboratório 9 usa temperatura de um trimestre; o 10, consumo de energia elét
 
 Os dois são **exercícios**, no mesmo formato do [ETL com notas do ENEM](AULA03/PYSPARK-BASICO/EXERCICIOS_ENEM.md) da AULA03: o script principal de cada um vem com quatro funções de Transform incompletas, e um `EXERCICIOS_*.md` ao lado traz o enunciado, a resposta esperada e o gabarito de cada uma — [`EXERCICIOS_AZURE.md`](AULA04/PYSPARK-AZURE-BLOB/EXERCICIOS_AZURE.md) e [`EXERCICIOS_AWS.md`](AULA04/PYSPARK-AWS-S3/EXERCICIOS_AWS.md).
 
-### Em qualquer um dos quatro
+### AULA05 — arquitetura medalhão, um job por camada
+
+| # | Laboratório | Interface | Motor | Duração |
+| --- | --- | --- | --- | --- |
+| 11 | [Arquitetura medalhão: Bronze, Silver e Gold](AULA05/PYSPARK-MEDALHAO/README.md) | três scripts `.py` no terminal | PySpark 3.5.3 local, sem Docker | **~10 min** |
+
+Volta a ser só local, como a AULA03 — sem Docker, sem SDK de nuvem. A mudança agora é estrutural: em vez de Extract/Transform/Load como funções de um script só, cada camada da arquitetura medalhão (Bronze/Silver/Gold) é um **job independente**, que lê do disco a saída do job anterior e para com uma mensagem clara se essa saída não existir.
+
+O dado é qualidade do ar (PM2.5, PM10, CO) de um trimestre, nas mesmas dez cidades de SC dos laboratórios da AULA04. É também um **exercício**, com cinco funções incompletas espalhadas pelos três jobs — enunciado, resposta esperada e gabarito em [`EXERCICIOS_MEDALHAO.md`](AULA05/PYSPARK-MEDALHAO/EXERCICIOS_MEDALHAO.md).
+
+### Em qualquer um dos cinco
 
 **Rode um laboratório de cada vez.** Antes de passar para o próximo, encerre o atual:
 
@@ -80,6 +92,8 @@ A AULA02 leva **cerca de 12 minutos**, e sobe um contêiner por vez. Some o down
 A AULA03 leva **cerca de 10 minutos**, dos quais 2 são preparo único do ambiente local (um venv com PySpark). Depois disso, só rodar os quatro scripts: 41 s, 55 s, 99 s e 27 s. Os exercícios são à parte, e rendem mais uma hora.
 
 A AULA04 leva **cerca de 8 minutos por laboratório** se o ambiente da AULA03 já existe — a diferença é só subir o emulador (`floci-az` ou `floci`) e instalar o SDK correspondente (`azure-storage-blob` ou `boto3`). Do zero, some o tempo de preparo da AULA03.
+
+A AULA05 leva **cerca de 10 minutos** se o ambiente da AULA03 já existe — é só rodar os três jobs em sequência (ou `executar_pipeline.py`). Do zero, some o tempo de preparo da AULA03: não precisa de Docker nem de SDK de nuvem.
 
 ---
 
@@ -328,6 +342,28 @@ O mesmo ETL, terceira vez: agora a nuvem é AWS (S3, emulado pelo [floci](https:
 A estrutura é idêntica à do Laboratório 9 — normalizar, validar com `F.coalesce(regra, F.lit(False))`, enriquecer, resumir — porque essa é exatamente a lição: **a regra de negócio não muda com o provedor de nuvem.** O que muda é só a convenção de cada SDK para "usar o serviço de verdade": o Blob troca ao **definir** uma connection string; o S3 troca ao **esvaziar** `AWS_ENDPOINT_URL` (`""`, não ausente) e deixar o boto3 resolver o endpoint da AWS real sozinho. Duas nuvens, duas convenções — e nenhuma das duas é intuitiva sem ler a documentação do respectivo SDK uma vez.
 
 Uma das cinco regras de validação (`unidades_consumidoras > 0`) rejeita **zero** linhas no dado gerado. Fica registrada de propósito: uma regra de validação com contagem zero não é uma regra inútil — é a que vai pegar o dia em que o sistema upstream mudar de comportamento.
+
+---
+
+## O que o laboratório faz — AULA05
+
+### 11. Arquitetura medalhão: Bronze, Silver e Gold — [abrir](AULA05/PYSPARK-MEDALHAO/README.md)
+
+Três jobs independentes, cada um com sua própria `SparkSession`, cada um lendo do disco o que o anterior gravou. O dado é qualidade do ar (PM2.5, PM10, CO) de um trimestre nas mesmas dez cidades de SC.
+
+| Job | Camada | O que faz | O que você vai ver |
+| --- | --- | --- | --- |
+| `01_bronze_ingestao.py` | Bronze | gera o dado, acrescenta proveniência ([exercício 1](AULA05/PYSPARK-MEDALHAO/EXERCICIOS_MEDALHAO.md)), grava sem filtrar nada | 923 leituras — idêntico ao CSV bruto |
+| `02_silver_limpeza.py` | Silver | normaliza, valida com motivo ([exercícios 2–3](AULA05/PYSPARK-MEDALHAO/EXERCICIOS_MEDALHAO.md)) | 889 aprovadas, 31 rejeitadas **com o motivo de cada uma** |
+| `03_gold_agregados.py` | Gold | classifica, junta com região, resume ([exercícios 4–5](AULA05/PYSPARK-MEDALHAO/EXERCICIOS_MEDALHAO.md)) | média de PM2.5 e dias moderados-ou-piores por região |
+
+### O que ele acrescenta às aulas anteriores
+
+A AULA03 e a AULA04 resolveram Extract/Transform/Load como funções de um script só. Aqui a unidade muda para o **job**: cada camada é um programa que sobe sua própria JVM, lê a saída física do job anterior e para com uma mensagem clara (`Bronze nao encontrada em ...`) se essa saída não existir — em vez de um `AnalysisException` sem contexto tentando ler um caminho que não foi escrito.
+
+A Bronze guarda **as 923 leituras geradas, sem exceção** — inclusive as fisicamente impossíveis (PM2.5 maior que PM10) e as duplicatas. Só a Silver decide o que é válido. É uma escolha deliberada: se a Bronze já filtrasse, a pergunta "esse valor absurdo veio de onde e quando" perderia a resposta, porque o dado que a originou nunca teria sido gravado em lugar nenhum.
+
+O preço da separação por camada é medido, não hipotético: cada job paga o custo de subir uma JVM (a mesma fração de segundos que já aparecia nos "~10 minutos" do laboratório da AULA03). Para um pipeline deste tamanho, três inicializações de Spark custam pouco perto do que se ganha — poder reprocessar só a Gold quando uma regra de negócio muda, sem tocar na ingestão nem na validação.
 
 ---
 
