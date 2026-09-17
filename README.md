@@ -1,6 +1,6 @@
 # Laboratórios de bancos distribuídos — o que acontece de verdade quando você grava
 
-Oito laboratórios em Docker, divididos em três aulas.
+Nove laboratórios, a maioria em Docker, divididos em quatro aulas.
 
 **AULA01 — comportamento sob falha (PACELC).** Você sobe um banco distribuído, quebra a rede de propósito e mede o que acontece. Em vez de decorar que "Cassandra é AP", você vê na tela em que momento exato ele aceita ou recusa uma escrita. Os dois estresses são sempre os mesmos:
 
@@ -10,6 +10,8 @@ Oito laboratórios em Docker, divididos em três aulas.
 **AULA02 — como cada modelo de dados grava.** Sem caos e sem cluster: um nó de cada motor, e a pergunta passa a ser o que o banco faz com a escrita que você mandou. Chave-valor, documento e família de colunas tratam a mesma gravação de três formas diferentes — e nas três há um comportamento seguro disponível que **não** é o padrão.
 
 **AULA03 — processar e gravar em escala.** Três scripts PySpark constroem um pipeline inteiro na sua própria máquina: criação do DataFrame, partições, as transformações do dia a dia e um ETL que valida, rejeita com motivo e grava Parquet particionado em disco. Aqui o banco sai de cena e entra o motor de processamento — junto com duas descobertas: o Spark não executa o que você escreveu, e sim o plano que ele reescreveu; e uma linha pode sumir de um pipeline inteiro por causa de um `NULL` numa condição de validação.
+
+**AULA04 — o mesmo ETL, com o dado morando na nuvem.** Continuação direta da AULA03: mesma estrutura de Extract/Transform/Load, mesma validação com motivo de rejeição, só que agora a entrada e a saída vivem num Azure Blob Storage (emulado localmente pelo [floci-az](https://floci.io/az/), sem precisar de conta no Azure). A pergunta muda de "como processar" para "como o processamento conversa com o armazenamento" — e a resposta, aqui, é que o Spark local nunca fala com o Blob diretamente: um SDK baixa, o Spark processa, o mesmo SDK sobe o resultado de volta.
 
 Todos os números publicados aqui foram medidos executando os laboratórios. Onde o resultado contrariou o esperado, o texto diz o que aconteceu e por quê.
 
@@ -46,11 +48,21 @@ A AULA02 não depende da AULA01 — dá para começar por ela. Mas o Laboratóri
 | --- | --- | --- | --- | --- |
 | 8 | [PySpark do zero: DataFrame, funcionalidades e ETL local](AULA03/PYSPARK-BASICO/README.md) | quatro scripts `.py` no terminal | PySpark 3.5.3 local, sem Docker | **~10 min** |
 
-É o único laboratório **sem Docker**: o Spark roda no seu próprio Python, e a saída vai para uma pasta no seu disco. Também é o único que traz arquivos prontos no clone — os quatro scripts e o módulo de configuração — porque aqui o que se estuda é o código, não a infraestrutura.
+É o único laboratório **sem Docker**: o Spark roda no seu próprio Python, e a saída vai para uma pasta no seu disco. É também um dos dois que trazem arquivos `.py` prontos no clone — os scripts e o módulo de configuração — porque aqui o que se estuda é o código, não a infraestrutura.
 
-É escrito para quem **nunca abriu o Spark**: começa por um script de vinte linhas comentadas uma a uma, tem glossário, uma seção sobre como ler um traceback de PySpark e [12 exercícios com gabarito](AULA03/PYSPARK-BASICO/EXERCICIOS.md).
+É escrito para quem **nunca abriu o Spark**: começa por um script de vinte linhas comentadas uma a uma, tem glossário, uma seção sobre como ler um traceback de PySpark, [12 exercícios com gabarito](AULA03/PYSPARK-BASICO/EXERCICIOS.md) e um [exercício de ETL com notas do ENEM em cidades de SC](AULA03/PYSPARK-BASICO/EXERCICIOS_ENEM.md), com lacunas para completar.
 
-### Em qualquer uma das três
+### AULA04 — o mesmo ETL, lendo e gravando na nuvem
+
+| # | Laboratório | Interface | Motor | Duração |
+| --- | --- | --- | --- | --- |
+| 9 | [ETL com PySpark e Azure Blob Storage](AULA04/PYSPARK-AZURE-BLOB/README.md) | dois scripts `.py` no terminal + floci-az em Docker | PySpark 3.5.3 local + floci-az (emulador de Blob) | **~8 min** |
+
+Depende do ambiente Python da AULA03 (Python, Java, `winutils.exe`) mais um contêiner novo — o [floci-az](https://floci.io/az/), um emulador de Azure. Não precisa de conta no Azure: o SDK que fala com o emulador é o mesmo que falaria com uma conta real, trocando só uma variável de ambiente.
+
+O dado é temperatura de um trimestre em dez cidades de Santa Catarina. A novidade não é o Spark — é onde a entrada e a saída moram, e por que o Spark local não fala com o Blob diretamente (veja o [README do laboratório](AULA04/PYSPARK-AZURE-BLOB/README.md#por-que-baixar-em-vez-de-ler-direto)).
+
+### Em qualquer um dos quatro
 
 **Rode um laboratório de cada vez.** Antes de passar para o próximo, encerre o atual:
 
@@ -63,6 +75,8 @@ A AULA01 leva **cerca de 20 minutos**, dos quais uns 11 são só esperando clust
 A AULA02 leva **cerca de 12 minutos**, e sobe um contêiner por vez. Some o download das imagens na primeira execução (MongoDB ~250 MB, Cassandra ~370 MB).
 
 A AULA03 leva **cerca de 10 minutos**, dos quais 2 são preparo único do ambiente local (um venv com PySpark). Depois disso, só rodar os quatro scripts: 41 s, 55 s, 99 s e 27 s. Os exercícios são à parte, e rendem mais uma hora.
+
+A AULA04 leva **cerca de 8 minutos** se o ambiente da AULA03 já existe — a diferença é só subir o floci-az e instalar o `azure-storage-blob`. Do zero, some o tempo de preparo da AULA03.
 
 ---
 
@@ -276,7 +290,28 @@ A AULA01 e a AULA02 tratam do banco recebendo uma escrita por vez. A AULA03 troc
 
 São perguntas diferentes, e o laboratório mostra, medindo, o que acontece ao responder uma com a outra: a mesma tabela sai com **24 arquivos** ou com **6**, dependendo de uma única linha antes do `write`.
 
-E há um fio que liga as três aulas. Na AULA01, o banco aceitava escrita sem réplica alcançável; na AULA02, aceitava sem nada em disco; aqui, o Spark aceita uma medição que não mediu nada — e um filtro de validação deixa 505 linhas evaporarem sem erro nenhum. **Nos três casos o sistema devolve um resultado plausível, e a única defesa é conferir o que ele de fato fez** — o retorno do `WAIT`, o `DBSIZE` depois da queda, o plano do `explain()`, a conta de entradas e saídas do ETL.
+E há um fio que liga as três primeiras aulas. Na AULA01, o banco aceitava escrita sem réplica alcançável; na AULA02, aceitava sem nada em disco; aqui, o Spark aceita uma medição que não mediu nada — e um filtro de validação deixa 505 linhas evaporarem sem erro nenhum. **Nos três casos o sistema devolve um resultado plausível, e a única defesa é conferir o que ele de fato fez** — o retorno do `WAIT`, o `DBSIZE` depois da queda, o plano do `explain()`, a conta de entradas e saídas do ETL.
+
+---
+
+## O que o laboratório faz — AULA04
+
+### 9. ETL com PySpark e Azure Blob Storage — [abrir](AULA04/PYSPARK-AZURE-BLOB/README.md)
+
+O mesmo formato Extract/Transform/Load da AULA03, com a entrada e a saída vivendo num container de Blob Storage (floci-az local) em vez do disco.
+
+| Script | O que faz | O que você vai ver |
+| --- | --- | --- |
+| `00_conectar_blob.py` | conectar, subir, listar, baixar e apagar um blob, sem Spark | as quatro operações que o ETL usa, isoladas |
+| `01_etl_temperaturas_sc.py` | ETL completo: gera o dado, sobe pro Blob, baixa, valida, enriquece, grava e sobe o resultado | 886 aprovadas, 34 rejeitadas **com o motivo de cada uma** |
+
+### O que ele acrescenta à AULA03
+
+A pergunta muda de "como processar" para "como o processamento conversa com o armazenamento". A resposta medida aqui: o Spark local em `local[4]` não fala com o Blob Storage diretamente — não há cluster distribuído para justificar um conector de sistema de arquivos (`wasb://`/`abfss://`), então o padrão é baixar com o SDK do Python, processar local, subir o resultado de volta com o mesmo SDK.
+
+**A mesma armadilha do `NULL` da AULA03 aparece de novo, com outra cara**: a validação usa o mesmo `F.coalesce(regra, F.lit(False))` para não deixar uma condição indefinida apagar linha dos dois lados — só que agora o gatilho é uma leitura de sensor com o município vazio, não uma UF ausente. E aparece uma variante nova: das 11 leituras rejeitadas por `temperatura_min > temperatura_max`, 7 **também** violam a faixa física de temperatura — duas regras batendo na mesma linha, resolvidas pela ordem do `F.when(...)`, não por acaso.
+
+A lição de portabilidade fica mais visível aqui do que em qualquer laboratório anterior: trocar o floci-az local por uma conta Azure real é mudar uma variável de ambiente (`AZURE_STORAGE_CONNECTION_STRING`) — nenhum script é reescrito, porque todo acesso ao Blob passa por quatro funções isoladas em `comum.py`.
 
 ---
 
@@ -287,6 +322,7 @@ E há um fio que liga as três aulas. Na AULA01, o banco aceitava escrita sem r�
 | Docker Engine | 28.4.0 |
 | Docker Compose | v2.39.2 |
 | Pumba (injeta a latência) | `gaiaadm/pumba` — é uma imagem, não precisa instalar; só a AULA01 usa |
+| floci-az (emulador de Azure) | `floci/floci-az:latest` — imagem, não precisa instalar; só a AULA04 usa |
 
 Não instale mais nada. Os clientes de linha de comando (`aws`, `cqlsh`, `redis-cli`, `psql`, `mongosh`) rodam dentro dos contêineres.
 

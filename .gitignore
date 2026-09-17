@@ -61,3 +61,7 @@ saida_vendas_parquet/
 # Artefatos gravados pelos scripts da AULA03/PYSPARK-BASICO
 AULA03/PYSPARK-BASICO/dados/
 AULA03/PYSPARK-BASICO/saida/
+
+# Artefatos gravados pelos scripts da AULA04/PYSPARK-AZURE-BLOB
+AULA04/PYSPARK-AZURE-BLOB/dados/
+AULA04/PYSPARK-AZURE-BLOB/saida/
