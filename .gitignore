@@ -65,3 +65,7 @@ AULA03/PYSPARK-BASICO/saida/
 # Artefatos gravados pelos scripts da AULA04/PYSPARK-AZURE-BLOB
 AULA04/PYSPARK-AZURE-BLOB/dados/
 AULA04/PYSPARK-AZURE-BLOB/saida/
+
+# Artefatos gravados pelos scripts da AULA04/PYSPARK-AWS-S3
+AULA04/PYSPARK-AWS-S3/dados/
+AULA04/PYSPARK-AWS-S3/saida/

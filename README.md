@@ -1,6 +1,6 @@
 # Laboratórios de bancos distribuídos — o que acontece de verdade quando você grava
 
-Nove laboratórios, a maioria em Docker, divididos em quatro aulas.
+Dez laboratórios, a maioria em Docker, divididos em quatro aulas.
 
 **AULA01 — comportamento sob falha (PACELC).** Você sobe um banco distribuído, quebra a rede de propósito e mede o que acontece. Em vez de decorar que "Cassandra é AP", você vê na tela em que momento exato ele aceita ou recusa uma escrita. Os dois estresses são sempre os mesmos:
 
@@ -11,7 +11,7 @@ Nove laboratórios, a maioria em Docker, divididos em quatro aulas.
 
 **AULA03 — processar e gravar em escala.** Três scripts PySpark constroem um pipeline inteiro na sua própria máquina: criação do DataFrame, partições, as transformações do dia a dia e um ETL que valida, rejeita com motivo e grava Parquet particionado em disco. Aqui o banco sai de cena e entra o motor de processamento — junto com duas descobertas: o Spark não executa o que você escreveu, e sim o plano que ele reescreveu; e uma linha pode sumir de um pipeline inteiro por causa de um `NULL` numa condição de validação.
 
-**AULA04 — o mesmo ETL, com o dado morando na nuvem.** Continuação direta da AULA03: mesma estrutura de Extract/Transform/Load, mesma validação com motivo de rejeição, só que agora a entrada e a saída vivem num Azure Blob Storage (emulado localmente pelo [floci-az](https://floci.io/az/), sem precisar de conta no Azure). A pergunta muda de "como processar" para "como o processamento conversa com o armazenamento" — e a resposta, aqui, é que o Spark local nunca fala com o Blob diretamente: um SDK baixa, o Spark processa, o mesmo SDK sobe o resultado de volta.
+**AULA04 — o mesmo ETL, com o dado morando na nuvem.** Continuação direta da AULA03: mesma estrutura de Extract/Transform/Load, mesma validação com motivo de rejeição, só que agora a entrada e a saída vivem na nuvem — dois laboratórios, dois exercícios, duas nuvens emuladas localmente sem precisar de conta real: Azure Blob Storage (via [floci-az](https://floci.io/az/)) e AWS S3 (via [floci](https://floci.io/aws/)). A pergunta muda de "como processar" para "como o processamento conversa com o armazenamento" — e a resposta, nos dois casos, é que o Spark local nunca fala com o armazenamento remoto diretamente: um SDK baixa, o Spark processa, o mesmo SDK sobe o resultado de volta.
 
 Todos os números publicados aqui foram medidos executando os laboratórios. Onde o resultado contrariou o esperado, o texto diz o que aconteceu e por quê.
 
@@ -57,12 +57,13 @@ A AULA02 não depende da AULA01 — dá para começar por ela. Mas o Laboratóri
 | # | Laboratório | Interface | Motor | Duração |
 | --- | --- | --- | --- | --- |
 | 9 | [ETL com PySpark e Azure Blob Storage](AULA04/PYSPARK-AZURE-BLOB/README.md) | dois scripts `.py` no terminal + floci-az em Docker | PySpark 3.5.3 local + floci-az (emulador de Blob) | **~8 min** |
+| 10 | [ETL com PySpark e AWS S3](AULA04/PYSPARK-AWS-S3/README.md) | dois scripts `.py` no terminal + floci em Docker | PySpark 3.5.3 local + floci (emulador de AWS) | **~8 min** |
 
-Depende do ambiente Python da AULA03 (Python, Java, `winutils.exe`) mais um contêiner novo — o [floci-az](https://floci.io/az/), um emulador de Azure. Não precisa de conta no Azure: o SDK que fala com o emulador é o mesmo que falaria com uma conta real, trocando só uma variável de ambiente.
+Os dois dependem do ambiente Python da AULA03 (Python, Java, `winutils.exe`) mais um contêiner novo — [floci-az](https://floci.io/az/) para o Laboratório 9, [floci](https://floci.io/aws/) para o 10. Nenhum dos dois precisa de conta na nuvem real: o SDK que fala com o emulador é o mesmo que falaria com uma conta real, trocando só uma variável de ambiente.
 
-O dado é temperatura de um trimestre em dez cidades de Santa Catarina. A novidade não é o Spark — é onde a entrada e a saída moram, e por que o Spark local não fala com o Blob diretamente (veja o [README do laboratório](AULA04/PYSPARK-AZURE-BLOB/README.md#por-que-baixar-em-vez-de-ler-direto)).
+O Laboratório 9 usa temperatura de um trimestre; o 10, consumo de energia elétrica por setor no mesmo trimestre — ambos nas mesmas dez cidades de Santa Catarina. A novidade não é o Spark — é onde a entrada e a saída moram, e por que o Spark local não fala com o armazenamento remoto diretamente (veja o "por que baixar em vez de ler direto" no README de [cada](AULA04/PYSPARK-AZURE-BLOB/README.md#por-que-baixar-em-vez-de-ler-direto) [laboratório](AULA04/PYSPARK-AWS-S3/README.md#por-que-baixar-em-vez-de-ler-direto)).
 
-Este laboratório é um **exercício**, no mesmo formato do [ETL com notas do ENEM](AULA03/PYSPARK-BASICO/EXERCICIOS_ENEM.md) da AULA03: o `01_etl_temperaturas_sc.py` vem com quatro funções de Transform incompletas, e o [`EXERCICIOS_AZURE.md`](AULA04/PYSPARK-AZURE-BLOB/EXERCICIOS_AZURE.md) traz o enunciado, a resposta esperada e o gabarito de cada uma.
+Os dois são **exercícios**, no mesmo formato do [ETL com notas do ENEM](AULA03/PYSPARK-BASICO/EXERCICIOS_ENEM.md) da AULA03: o script principal de cada um vem com quatro funções de Transform incompletas, e um `EXERCICIOS_*.md` ao lado traz o enunciado, a resposta esperada e o gabarito de cada uma — [`EXERCICIOS_AZURE.md`](AULA04/PYSPARK-AZURE-BLOB/EXERCICIOS_AZURE.md) e [`EXERCICIOS_AWS.md`](AULA04/PYSPARK-AWS-S3/EXERCICIOS_AWS.md).
 
 ### Em qualquer um dos quatro
 
@@ -78,7 +79,7 @@ A AULA02 leva **cerca de 12 minutos**, e sobe um contêiner por vez. Some o down
 
 A AULA03 leva **cerca de 10 minutos**, dos quais 2 são preparo único do ambiente local (um venv com PySpark). Depois disso, só rodar os quatro scripts: 41 s, 55 s, 99 s e 27 s. Os exercícios são à parte, e rendem mais uma hora.
 
-A AULA04 leva **cerca de 8 minutos** se o ambiente da AULA03 já existe — a diferença é só subir o floci-az e instalar o `azure-storage-blob`. Do zero, some o tempo de preparo da AULA03.
+A AULA04 leva **cerca de 8 minutos por laboratório** se o ambiente da AULA03 já existe — a diferença é só subir o emulador (`floci-az` ou `floci`) e instalar o SDK correspondente (`azure-storage-blob` ou `boto3`). Do zero, some o tempo de preparo da AULA03.
 
 ---
 
@@ -315,6 +316,19 @@ A pergunta muda de "como processar" para "como o processamento conversa com o ar
 
 A lição de portabilidade fica mais visível aqui do que em qualquer laboratório anterior: trocar o floci-az local por uma conta Azure real é mudar uma variável de ambiente (`AZURE_STORAGE_CONNECTION_STRING`) — nenhum script é reescrito, porque todo acesso ao Blob passa por quatro funções isoladas em `comum.py`.
 
+### 10. ETL com PySpark e AWS S3 — [abrir](AULA04/PYSPARK-AWS-S3/README.md)
+
+O mesmo ETL, terceira vez: agora a nuvem é AWS (S3, emulado pelo [floci](https://floci.io/aws/)), e o dado é consumo de energia elétrica por setor (residencial, comercial, industrial, rural) no mesmo trimestre das outras aulas, nas mesmas dez cidades de SC.
+
+| Script | O que faz | O que você vai ver |
+| --- | --- | --- |
+| `00_conectar_s3.py` | conectar, subir, listar, baixar e apagar um objeto, sem Spark | as quatro operações que o ETL usa, isoladas |
+| `01_etl_energia_sc.py` | **exercício**: Fonte/Extract/Load prontos, quatro funções de Transform para completar ([gabarito](AULA04/PYSPARK-AWS-S3/EXERCICIOS_AWS.md)) | 3538 aprovadas, 142 rejeitadas **com o motivo de cada uma** |
+
+A estrutura é idêntica à do Laboratório 9 — normalizar, validar com `F.coalesce(regra, F.lit(False))`, enriquecer, resumir — porque essa é exatamente a lição: **a regra de negócio não muda com o provedor de nuvem.** O que muda é só a convenção de cada SDK para "usar o serviço de verdade": o Blob troca ao **definir** uma connection string; o S3 troca ao **esvaziar** `AWS_ENDPOINT_URL` (`""`, não ausente) e deixar o boto3 resolver o endpoint da AWS real sozinho. Duas nuvens, duas convenções — e nenhuma das duas é intuitiva sem ler a documentação do respectivo SDK uma vez.
+
+Uma das cinco regras de validação (`unidades_consumidoras > 0`) rejeita **zero** linhas no dado gerado. Fica registrada de propósito: uma regra de validação com contagem zero não é uma regra inútil — é a que vai pegar o dia em que o sistema upstream mudar de comportamento.
+
 ---
 
 ## Antes de começar
@@ -324,9 +338,10 @@ A lição de portabilidade fica mais visível aqui do que em qualquer laboratór
 | Docker Engine | 28.4.0 |
 | Docker Compose | v2.39.2 |
 | Pumba (injeta a latência) | `gaiaadm/pumba` — é uma imagem, não precisa instalar; só a AULA01 usa |
-| floci-az (emulador de Azure) | `floci/floci-az:latest` — imagem, não precisa instalar; só a AULA04 usa |
+| floci-az (emulador de Azure) | `floci/floci-az:latest` — imagem, não precisa instalar; só o Laboratório 9 usa |
+| floci (emulador de AWS) | `floci/floci:latest` — imagem, não precisa instalar; só o Laboratório 10 usa |
 
-Não instale mais nada. Os clientes de linha de comando (`aws`, `cqlsh`, `redis-cli`, `psql`, `mongosh`) rodam dentro dos contêineres.
+Não instale mais nada. Os clientes de linha de comando (`aws`, `cqlsh`, `redis-cli`, `psql`, `mongosh`) rodam dentro dos contêineres — exceto na AULA04, onde é o próprio script Python (via SDK) que fala com o emulador.
 
 ### Os arquivos de configuração não vêm no clone
 
