@@ -1,6 +1,6 @@
 # Laboratórios de bancos distribuídos — o que acontece de verdade quando você grava
 
-Treze laboratórios, a maioria em Docker, divididos em cinco aulas.
+Dezoito laboratórios, a maioria em Docker, divididos em seis aulas.
 
 **AULA01 — comportamento sob falha (PACELC).** Você sobe um banco distribuído, quebra a rede de propósito e mede o que acontece. Em vez de decorar que "Cassandra é AP", você vê na tela em que momento exato ele aceita ou recusa uma escrita. Os dois estresses são sempre os mesmos:
 
@@ -80,6 +80,26 @@ O Laboratório 11 é só local, como a AULA03 — sem Docker, sem SDK de nuvem. 
 Os Laboratórios 12 e 13 juntam essa ideia com a nuvem da AULA04: as mesmas três camadas, só que cada uma vive num prefixo de Blob ou de bucket S3, não numa pasta local — cada job baixa a camada anterior inteira antes de processar, e sobe o resultado de volta. O 12 usa pluviometria (chuva e umidade); o 13, coleta de resíduos sólidos (toneladas totais e recicláveis).
 
 Os três são **exercícios**, com cinco funções incompletas cada um, espalhadas pelos três jobs — enunciado, resposta esperada e gabarito em [`EXERCICIOS_MEDALHAO.md`](AULA05/PYSPARK-MEDALHAO/EXERCICIOS_MEDALHAO.md), [`EXERCICIOS_CHUVA.md`](AULA05/PYSPARK-MEDALHAO-AZURE-BLOB/EXERCICIOS_CHUVA.md) e [`EXERCICIOS_RESIDUOS.md`](AULA05/PYSPARK-MEDALHAO-AWS-S3/EXERCICIOS_RESIDUOS.md).
+
+### AULA06 — Spark ML dentro do pipeline medalhão
+
+| # | Laboratório | Interface | Motor | Duração |
+| --- | --- | --- | --- | --- |
+| 14 | [Machine Learning com PySpark e arquitetura medalhão](AULA06/PYSPARK-SPARK-ML/README.md) | três jobs `.py` no terminal | PySpark 3.5.3 local, Spark MLlib | não aferida |
+| 15 | [Spark ML: fraude, texto e recomendação](AULA06/PYSPARK-SPARK-ML-PARTE2/README.md) | três jobs `.py` no terminal | PySpark 3.5.3 local, Spark MLlib | não aferida |
+| 16 | [Spark ML: manutenção preditiva e validação cruzada](AULA06/PYSPARK-SPARK-ML-PARTE3/README.md) | três jobs `.py` no terminal | PySpark 3.5.3 local, Spark MLlib | não aferida |
+| 17 | [Aprendizado supervisionado: classificação e regressão](AULA06/PYSPARK-SPARK-ML-SUPERVISIONADO/README.md) | três jobs `.py` no terminal | PySpark 3.5.3 local, Spark MLlib | não aferida |
+| 18 | [Aprendizado não supervisionado: K-Means e PCA](AULA06/PYSPARK-SPARK-ML-NAO-SUPERVISIONADO/README.md) | três jobs `.py` no terminal | PySpark 3.5.3 local, Spark MLlib | não aferida |
+
+A AULA06 reaproveita o ambiente local da AULA03 e a separação de jobs da AULA05. A Silver prepara os dados; na Gold, Spark ML resolve três problemas de áreas diferentes: **classificação** de risco de churn em assinaturas, **regressão** de demanda de energia e **clusterização** de clientes de varejo. Os dados são sintéticos, reproduzíveis e gerados localmente; não há conta de nuvem, Docker ou dependência além do PySpark.
+
+É um exercício guiado no mesmo formato da AULA05: as três funções de modelo na Gold vêm incompletas, com enunciado, resposta esperada e gabarito em [`EXERCICIOS_SPARK_ML.md`](AULA06/PYSPARK-SPARK-ML/EXERCICIOS_SPARK_ML.md). O aluno implementa classificação, regressão e clusterização e grava previsões, métricas e modelos na Gold.
+
+A segunda parte amplia a aplicabilidade do Spark ML com **detecção de fraude** (classificação com classe rara), **análise de sentimento** (pipeline de NLP com Naive Bayes) e **recomendação de produtos** (ALS). Também é um exercício com funções incompletas e gabaritos em [`EXERCICIOS_SPARK_ML_PARTE2.md`](AULA06/PYSPARK-SPARK-ML-PARTE2/EXERCICIOS_SPARK_ML_PARTE2.md), no mesmo formato da primeira parte.
+
+A terceira parte apresenta **manutenção preditiva** e seleção de hiperparâmetros com `CrossValidator` e `ParamGridBuilder`. Bronze preserva as leituras, Silver valida e registra rejeições, e Gold compara configurações no treino antes de avaliar o melhor modelo no teste. O exercício e o gabarito estão em [`EXERCICIOS_SPARK_ML_PARTE3.md`](AULA06/PYSPARK-SPARK-ML-PARTE3/EXERCICIOS_SPARK_ML_PARTE3.md).
+
+Para estudar cada paradigma isoladamente, os Laboratórios 17 e 18 separam os exemplos: o 17 usa exclusivamente rótulos conhecidos em classificação e regressão; o 18 não possui coluna-alvo e trabalha com descoberta de segmentos e redução de dimensionalidade.
 
 ### Em qualquer um dos cinco
 
